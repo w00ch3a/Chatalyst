@@ -174,6 +174,8 @@ uses its own flag names:
 ```bash
 uv run chatalyst-mcp --workspace /path/to/chatalyst --read-only
 uv run chatalyst-mcp --workspace /path/to/chatalyst --browser-mode provider
+uv run chatalyst-mcp --workspace /path/to/chatalyst --mcp-default-project "Research"
+uv run chatalyst-mcp --workspace /path/to/chatalyst --mcp-default-conversation "Daily work thread"
 uv run chatalyst-mcp --workspace /path/to/chatalyst --max-request-bytes 1000000
 uv run chatalyst-mcp --workspace /path/to/chatalyst --max-text-chars 100000
 ```
@@ -204,6 +206,50 @@ Point MCP clients at the project directory so the server can use the same
   }
 }
 ```
+
+If `chatalyst-mcp` is installed as a user tool, a local MCP client can launch it
+directly:
+
+```json
+{
+  "command": "/home/user/.local/bin/chatalyst-mcp",
+  "args": [
+    "--workspace",
+    "/home/user/.local/share/chatalyst",
+    "--browser-mode",
+    "provider",
+    "--browser-profile",
+    "ultralight",
+    "--mcp-default-project",
+    "Research",
+    "--mcp-live-response-timeout-seconds",
+    "180"
+  ],
+  "env": {}
+}
+```
+
+For a remote host, use SSH as the MCP command and run the installed command on
+that host:
+
+```json
+{
+  "command": "ssh",
+  "args": [
+    "user@example.local",
+    "/home/user/.local/bin/chatalyst-mcp",
+    "--workspace",
+    "/home/user/.local/share/chatalyst",
+    "--browser-mode",
+    "provider"
+  ],
+  "env": {}
+}
+```
+
+Each CLI switch and value must be a separate JSON array item. For example,
+`"--mcp-default-project", "Research"` is valid; combining the switch and quoted
+value into one string is not.
 
 The MCP server can run in full live mode or read-only vault mode. Use the TUI for
 first login, manual ChatGPT browser inspection, and reviewed terminal snippet

@@ -51,12 +51,15 @@ the service layer, and README security guidance.
   `chatalyst/app.py:515-573`, `README.md:105-157`.
 - Evidence: MCP tools can read the vault and, when full mode is enabled, export
   conversations, stage snippets, create new ChatGPT chats, or reply in existing
-  cached conversations through Playwright.
+  cached conversations through Playwright. New-chat calls can be scoped to a
+  visible ChatGPT project by server configuration or per-call `project_name`.
 - Impact: If a trusted MCP host is accidentally bridged beyond the local user,
   another LAN client could read cached conversations, create exports/snippets,
   or send messages through the user's authenticated ChatGPT session.
 - Fix applied: Added read-only MCP mode via `chatalyst --mcp --mcp-read-only`
   and `chatalyst-mcp --read-only`; write tools are omitted in read-only mode.
+  Live new-chat tools now fail closed if a requested project scope is not
+  visible in the ChatGPT UI instead of silently creating an unscoped chat.
 - Verification: `tools/list` in read-only mode exposes only search/list/get
   tools, and a `chatalyst_stage_snippet` call returns an unknown-tool error.
 - Residual risk: A third-party MCP network bridge still needs its own
@@ -139,7 +142,8 @@ the service layer, and README security guidance.
   only string-built SQL clauses are internal fixed order/table lists or generated
   placeholder lists.
 - MCP full mode exposes constrained live ChatGPT send/reply tools through the
-  service layer. It does not expose raw browser control or terminal execution.
+  service layer, with optional project/conversation scoping. It does not expose
+  raw browser control or terminal execution.
 
 ## Verification performed
 

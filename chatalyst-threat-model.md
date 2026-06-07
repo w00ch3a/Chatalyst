@@ -42,7 +42,8 @@ Open questions that could change risk ranking:
 - Local vault: SQLite stores conversations, messages, notes, tags, bookmarks,
   exports, snippets, and FTS index. Evidence: `chatalyst/core/cache.py:69-177`.
 - MCP stdio server: automation access to local vault search/read/export/snippet
-  staging plus live ChatGPT send/reply tools in full mode, with read-only and
+  staging plus live ChatGPT send/reply tools in full mode, including optional
+  default conversation/project scoping for live tools, with read-only and
   size controls. Evidence: `chatalyst/core/mcp_server.py:34-61`,
   `chatalyst/core/mcp_server.py:333-344`.
 - Terminal/snippet runner: local subprocess execution without shell expansion,
@@ -84,7 +85,7 @@ Open questions that could change risk ranking:
 
 - MCP client -> MCP stdio server -> SQLite vault:
   - Data: JSON-RPC requests, search queries, conversation IDs, export/snippet
-    requests, live ChatGPT prompts.
+    requests, project names, live ChatGPT prompts.
   - Channel: stdin/stdout stdio, optionally launched by an MCP host.
   - Security guarantees: no terminal execution or raw browser control; optional
     read-only mode; request and text-size caps.
@@ -156,7 +157,9 @@ flowchart TD
 - No remote HTTP API or network listener exists in the current repo.
 - MCP does not expose terminal execution or raw browser automation; full MCP mode
   can ask Chatalyst to create a new ChatGPT chat or reply in a cached
-  conversation through the service layer.
+  conversation through the service layer. New-chat requests may be scoped to a
+  visible ChatGPT project through `--mcp-default-project` or a per-call
+  `project_name`.
 - An attacker is not assumed to already control the OS user account; if they do,
   the browser profile and vault are already compromised.
 

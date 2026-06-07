@@ -1,0 +1,52 @@
+# Python / tooling
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+
+# macOS / editor noise
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+
+# Local secrets / environment
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.token
+secrets/
+
+# Personal ChatGPT browser profile and auth state
+profile/
+profile/chromium/
+
+# Local vault data: conversations, notes, bookmarks, tags, exports
+storage/
+storage/*.db
+storage/*.db-*
+*.sqlite
+*.sqlite3
+*.db
+*.db-*
+
+# Runtime output and private generated artifacts
+logs/
+exports/
+runtime/
+work/
+playwright-report/
+test-results/

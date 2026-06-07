@@ -13,7 +13,11 @@ from loguru import logger
 
 from chatalyst.core.browser import BrowserController
 from chatalyst.core.cache import ChatCache
-from chatalyst.core.chatgpt import ChatGPTService, PromptSubmittedNoAssistantResponseError
+from chatalyst.core.chatgpt import (
+    ChatGPTService,
+    ProjectSelectionError,
+    PromptSubmittedNoAssistantResponseError,
+)
 from chatalyst.core.config import AppConfig
 from chatalyst.core.export import ExportFormat, ExportService
 from chatalyst.core.models import Conversation, LoginState, Message
@@ -235,6 +239,7 @@ class ChatalystMCPServer:
         if not prompt.strip():
             raise MCPError(-32602, "prompt must not be empty.")
         wait_seconds = self._optional_wait_seconds(arguments)
+        project_name = self._optional_project_name(arguments)
         try:
             async with RuntimeLock(
                 self.config.runtime_lock_path,
@@ -242,14 +247,17 @@ class ChatalystMCPServer:
             ):
                 chatgpt = await self._live_chatgpt()
                 try:
-                    await chatgpt.new_chat()
+                    await chatgpt.new_chat(project_name=project_name)
                     return await self._send_prompt_and_payload(
                         prompt,
                         wait_seconds=wait_seconds,
+                        project_name=project_name,
                     )
                 finally:
                     await self._park_browser()
         except RuntimeLockError as exc:
+            raise MCPError(-32000, str(exc)) from exc
+        except ProjectSelectionError as exc:
             raise MCPError(-32000, str(exc)) from exc
 
     async def _tool_reply_to_conversation(self, arguments: JsonObject) -> JsonObject:
@@ -380,13 +388,15 @@ class ChatalystMCPServer:
                     "name": "chatalyst_send_new_message",
                     "description": (
                         "Create a new ChatGPT chat and send a prompt through the "
-                        "browser session."
+                        "browser session. Uses the configured default project when "
+                        "one is set, unless project_name is provided."
                     ),
                     "inputSchema": {
                         "type": "object",
                         "required": ["prompt"],
                         "properties": {
                             "prompt": {"type": "string"},
+                            "project_name": {"type": "string"},
                             "wait_for_response_seconds": {
                                 "type": "number",
                                 "minimum": 5,
@@ -466,6 +476,19 @@ class ChatalystMCPServer:
         if value < 5 or value > 240:
             raise MCPError(-32602, "wait_for_response_seconds must be between 5 and 240.")
         return float(value)
+
+    def _optional_project_name(self, arguments: JsonObject) -> str | None:
+        value = self._optional_str(arguments, "project_name")
+        if value is None:
+            value = self.config.mcp_default_project
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise MCPError(-32602, "project_name must not be blank.")
+        if len(stripped) > 200:
+            raise MCPError(-32602, "project_name exceeds 200 characters.")
+        return stripped
 
     def _resolve_scoped_conversation(
         self,
@@ -583,15 +606,16 @@ class ChatalystMCPServer:
         prompt: str,
         *,
         wait_seconds: float,
+        project_name: str | None = None,
     ) -> JsonObject:
         if self.chatgpt is None:
             raise MCPError(-32603, "ChatGPT service is unavailable.")
         streamed: list[Message] = []
+        send_kwargs: JsonObject = {"response_timeout_seconds": wait_seconds}
+        if project_name is not None:
+            send_kwargs["project_name"] = project_name
         try:
-            async for message in self.chatgpt.send_message(
-                prompt,
-                response_timeout_seconds=wait_seconds,
-            ):
+            async for message in self.chatgpt.send_message(prompt, **send_kwargs):
                 streamed.append(message)
         except PromptSubmittedNoAssistantResponseError as exc:
             conversation = self.cache.get_conversation(exc.conversation_id)

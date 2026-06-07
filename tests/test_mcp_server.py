@@ -59,6 +59,33 @@ def test_mcp_wait_seconds_rejects_bool_override(tmp_path):
         server.cache.close()
 
 
+def test_mcp_project_name_defaults_to_config(tmp_path):
+    server = _server(tmp_path)
+    server.config = server.config.model_copy(update={"mcp_default_project": "Research"})
+    try:
+        assert server._optional_project_name({}) == "Research"
+    finally:
+        server.cache.close()
+
+
+def test_mcp_project_name_argument_overrides_config(tmp_path):
+    server = _server(tmp_path)
+    server.config = server.config.model_copy(update={"mcp_default_project": "Research"})
+    try:
+        assert server._optional_project_name({"project_name": "Ops"}) == "Ops"
+    finally:
+        server.cache.close()
+
+
+def test_mcp_project_name_rejects_blank_value(tmp_path):
+    server = _server(tmp_path)
+    try:
+        with pytest.raises(MCPError, match="must not be blank"):
+            server._optional_project_name({"project_name": "   "})
+    finally:
+        server.cache.close()
+
+
 def test_mcp_limit_rejects_bool(tmp_path):
     server = _server(tmp_path)
     try:
@@ -299,6 +326,104 @@ async def test_mcp_reply_uses_default_conversation_when_argument_omitted(tmp_pat
     assert chatgpt.opened_conversation_id == conversation.id
     assert payload["conversation"]["id"] == conversation.id
     assert payload["final_message"]["markdown"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_mcp_send_new_message_uses_default_project(tmp_path):
+    server = _server(tmp_path)
+    conversation = Conversation(
+        id="chat-1",
+        title="Project Chat",
+        project_name="Research",
+        sync_status=SyncStatus.CACHED,
+    )
+    server.cache.upsert_conversation(conversation)
+    server.config = server.config.model_copy(update={"mcp_default_project": "Research"})
+
+    class ProjectChatGPT:
+        new_chat_project_name: str | None = None
+        send_project_name: str | None = None
+
+        async def new_chat(self, *, project_name=None):
+            self.new_chat_project_name = project_name
+            return conversation
+
+        async def send_message(self, prompt, *, response_timeout_seconds=None, project_name=None):
+            self.send_project_name = project_name
+            yield Message(
+                id="msg-1",
+                conversation_id=conversation.id,
+                role=MessageRole.ASSISTANT,
+                markdown="ok",
+                ordinal=1,
+            )
+
+    chatgpt = ProjectChatGPT()
+
+    async def live_chatgpt():
+        server.chatgpt = chatgpt  # type: ignore[assignment]
+        return chatgpt
+
+    async def park_browser():
+        return None
+
+    server._live_chatgpt = live_chatgpt  # type: ignore[method-assign]
+    server._park_browser = park_browser  # type: ignore[method-assign]
+    try:
+        payload = await server._tool_send_new_message({"prompt": "hello"})
+    finally:
+        server.cache.close()
+
+    assert chatgpt.new_chat_project_name == "Research"
+    assert chatgpt.send_project_name == "Research"
+    assert payload["final_message"]["markdown"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_mcp_send_new_message_allows_project_override(tmp_path):
+    server = _server(tmp_path)
+    conversation = Conversation(
+        id="chat-1",
+        title="Project Chat",
+        project_name="Ops",
+        sync_status=SyncStatus.CACHED,
+    )
+    server.cache.upsert_conversation(conversation)
+    server.config = server.config.model_copy(update={"mcp_default_project": "Research"})
+
+    class ProjectChatGPT:
+        new_chat_project_name: str | None = None
+
+        async def new_chat(self, *, project_name=None):
+            self.new_chat_project_name = project_name
+            return conversation
+
+        async def send_message(self, prompt, *, response_timeout_seconds=None, project_name=None):
+            yield Message(
+                id="msg-1",
+                conversation_id=conversation.id,
+                role=MessageRole.ASSISTANT,
+                markdown="ok",
+                ordinal=1,
+            )
+
+    chatgpt = ProjectChatGPT()
+
+    async def live_chatgpt():
+        server.chatgpt = chatgpt  # type: ignore[assignment]
+        return chatgpt
+
+    async def park_browser():
+        return None
+
+    server._live_chatgpt = live_chatgpt  # type: ignore[method-assign]
+    server._park_browser = park_browser  # type: ignore[method-assign]
+    try:
+        await server._tool_send_new_message({"prompt": "hello", "project_name": "Ops"})
+    finally:
+        server.cache.close()
+
+    assert chatgpt.new_chat_project_name == "Ops"
 
 
 @pytest.mark.asyncio

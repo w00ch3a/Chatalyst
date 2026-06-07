@@ -53,6 +53,10 @@ class PromptSubmittedNoAssistantResponseError(RuntimeError):
         self.prompt = prompt
 
 
+class ProjectSelectionError(RuntimeError):
+    """Raised when a requested ChatGPT project is not visible in the browser UI."""
+
+
 class ChatGPTService:
     """Extraction layer over ChatGPT's visible browser UI."""
 
@@ -157,16 +161,22 @@ class ChatGPTService:
         )
         return extracted
 
-    async def new_chat(self) -> Conversation:
+    async def new_chat(self, *, project_name: str | None = None) -> Conversation:
         page = await self.browser.open_chatgpt()
+        normalized_project = project_name.strip() if project_name else None
+        if normalized_project:
+            await self._open_project(page, normalized_project)
         clicked = await self._click_first(page, self.selectors.new_chat_button)
         if not clicked:
             await page.goto(self.config.chatgpt_url, wait_until="domcontentloaded")
+            if normalized_project:
+                await self._open_project(page, normalized_project)
         await self._wait_for_any(page, self.selectors.composer)
         conversation = Conversation(
             id=self._hash_id(page.url or f"new-{utc_now().isoformat()}"),
             title="New Chat",
             url=page.url,
+            project_name=normalized_project,
             sync_status=SyncStatus.SYNCING,
         )
         self.cache.upsert_conversation(conversation)
@@ -177,6 +187,7 @@ class ChatGPTService:
         prompt: str,
         *,
         response_timeout_seconds: float | None = None,
+        project_name: str | None = None,
     ) -> AsyncIterator[Message]:
         if not prompt.strip():
             return
@@ -192,6 +203,7 @@ class ChatGPTService:
                     title="New Chat",
                     url=starting_url,
                     chat_identifier=conversation_id,
+                    project_name=project_name,
                     sync_status=SyncStatus.SYNCING,
                 )
             )
@@ -286,6 +298,7 @@ class ChatGPTService:
                     title=await self._extract_title(page, "New Chat"),
                     url=page.url,
                     chat_identifier=actual_conversation_id,
+                    project_name=project_name,
                     sync_status=SyncStatus.CACHED,
                 )
                 self.cache.reconcile_conversation_id(conversation_id, conversation)
@@ -330,6 +343,7 @@ class ChatGPTService:
                     title=await self._extract_title(page, "New Chat"),
                     url=page.url,
                     chat_identifier=actual_conversation_id,
+                    project_name=project_name,
                     sync_status=SyncStatus.CACHED,
                 )
                 self.cache.reconcile_conversation_id(user_message.conversation_id, conversation)
@@ -380,6 +394,32 @@ class ChatGPTService:
             self.cache.upsert_message(message)
         await self.apply_display_pruning(page)
         return ExtractionResult(conversation=conversation, messages=messages)
+
+    async def _open_project(self, page: Page, project_name: str) -> None:
+        normalized = project_name.strip()
+        if not normalized:
+            raise ProjectSelectionError("Project name must not be blank.")
+        await self._wait_for_any(page, self.selectors.project_labels)
+        escaped = re.escape(normalized)
+        project_link = page.locator(
+            'a[href*="/g/"], [data-testid*="project"], nav [role="treeitem"], '
+            "nav a, aside a"
+        ).filter(has_text=re.compile(rf"^\s*{escaped}\s*$", re.IGNORECASE))
+        if await project_link.count() == 0:
+            project_link = page.locator(
+                'a[href*="/g/"], [data-testid*="project"], nav [role="treeitem"], '
+                "nav a, aside a"
+            ).filter(has_text=re.compile(escaped, re.IGNORECASE))
+        if await project_link.count() == 0:
+            raise ProjectSelectionError(
+                f"ChatGPT project is not visible in the browser UI: {normalized}"
+            )
+        await project_link.first.click()
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=5_000)
+        except PlaywrightTimeoutError:
+            pass
+        await self._wait_for_any(page, self.selectors.composer)
 
     async def extract_messages(self, page: Page, conversation_id: str) -> list[Message]:
         raw_messages = await page.evaluate(

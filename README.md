@@ -133,6 +133,8 @@ uv run chatalyst --mcp --mcp-read-only
 uv run chatalyst --mcp --offline
 uv run chatalyst --mcp --debug
 uv run chatalyst --mcp --mcp-live-response-timeout-seconds 75
+uv run chatalyst --mcp --mcp-default-project "Research"
+uv run chatalyst --mcp --mcp-default-conversation "Daily work thread"
 ```
 
 It exposes the local knowledge vault, not raw browser or terminal control. The
@@ -151,6 +153,12 @@ The live ChatGPT tools use the same Playwright browser session as the TUI. They
 create new chats or reply to cached existing conversations by typing through the
 authenticated browser session, then cache the updated conversation locally. They
 do not expose raw browser control or terminal execution.
+
+When `--mcp-default-project` is set, `chatalyst_send_new_message` first opens
+that visible ChatGPT project before creating the new chat. A tool call can also
+provide `project_name` to override the configured project for that one request.
+If the project is not visible in ChatGPT's sidebar/project UI, Chatalyst returns
+an MCP error instead of silently creating an unscoped chat.
 
 Use `--mcp-read-only` for LAN-adjacent or bridged automation that should not
 write exports/snippets or send ChatGPT messages. MCP requests are size-capped by

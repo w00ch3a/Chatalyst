@@ -166,11 +166,10 @@ class ChatGPTService:
         normalized_project = project_name.strip() if project_name else None
         if normalized_project:
             await self._open_project(page, normalized_project)
-        clicked = await self._click_first(page, self.selectors.new_chat_button)
-        if not clicked:
-            await page.goto(self.config.chatgpt_url, wait_until="domcontentloaded")
-            if normalized_project:
-                await self._open_project(page, normalized_project)
+        else:
+            clicked = await self._click_first(page, self.selectors.new_chat_button)
+            if not clicked:
+                await page.goto(self.config.chatgpt_url, wait_until="domcontentloaded")
         await self._wait_for_any(page, self.selectors.composer)
         conversation = Conversation(
             id=self._hash_id(page.url or f"new-{utc_now().isoformat()}"),

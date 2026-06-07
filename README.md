@@ -154,6 +154,15 @@ create new chats or reply to cached existing conversations by typing through the
 authenticated browser session, then cache the updated conversation locally. They
 do not expose raw browser control or terminal execution.
 
+MCP tool choice:
+
+- Use `chatalyst_search`, `chatalyst_list_conversations`, and
+  `chatalyst_get_conversation` to inspect the local vault.
+- Use `chatalyst_reply_to_conversation` to continue work or research in an
+  existing ChatGPT thread.
+- Use `chatalyst_send_new_message` when a fresh ChatGPT thread is the right
+  shape for the task.
+
 When `--mcp-default-project` is set, `chatalyst_send_new_message` first opens
 that visible ChatGPT project before creating the new chat. A tool call can also
 provide `project_name` to override the configured project for that one request.

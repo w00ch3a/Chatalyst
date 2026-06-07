@@ -296,15 +296,21 @@ class ChatalystMCPServer:
         tools = [
             {
                 "name": "chatalyst_get_scope",
-                "description": "Show the default MCP conversation/project scope.",
+                "description": (
+                    "Show Chatalyst's configured default conversation/project scope. "
+                    "Use this before live reply/new-chat calls when scope matters."
+                ),
+                "annotations": {"readOnlyHint": True},
                 "inputSchema": {"type": "object", "properties": {}},
             },
             {
                 "name": "chatalyst_search",
                 "description": (
-                    "Search cached Chatalyst conversations, messages, notes, tags, "
-                    "and bookmarks."
+                    "Search only the local Chatalyst cache: cached ChatGPT "
+                    "conversation titles/messages, notes, tags, and bookmarks. "
+                    "For fresh research, use a live ChatGPT send/reply tool instead."
                 ),
+                "annotations": {"readOnlyHint": True},
                 "inputSchema": {
                     "type": "object",
                     "required": ["query"],
@@ -316,7 +322,11 @@ class ChatalystMCPServer:
             },
             {
                 "name": "chatalyst_list_conversations",
-                "description": "List locally cached conversations, pinned and recent first.",
+                "description": (
+                    "List locally cached Chatalyst conversations, pinned and recent "
+                    "first. Use this to find conversation_id values for get/reply."
+                ),
+                "annotations": {"readOnlyHint": True},
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -327,8 +337,10 @@ class ChatalystMCPServer:
             {
                 "name": "chatalyst_get_conversation",
                 "description": (
-                    "Read one cached conversation with messages, notes, tags, and stats."
+                    "Read one locally cached Chatalyst conversation with messages, "
+                    "notes, tags, and stats. Does not refresh ChatGPT or browse the web."
                 ),
+                "annotations": {"readOnlyHint": True},
                 "inputSchema": {
                     "type": "object",
                     "required": ["conversation_id"],
@@ -337,7 +349,11 @@ class ChatalystMCPServer:
             },
             {
                 "name": "chatalyst_list_bookmarks",
-                "description": "List cached bookmarks, optionally scoped to one conversation.",
+                "description": (
+                    "List locally cached Chatalyst bookmarks, optionally scoped to "
+                    "one conversation."
+                ),
+                "annotations": {"readOnlyHint": True},
                 "inputSchema": {
                     "type": "object",
                     "properties": {"conversation_id": {"type": "string"}},
@@ -350,7 +366,11 @@ class ChatalystMCPServer:
             [
                 {
                     "name": "chatalyst_export_conversation",
-                    "description": "Export a cached conversation to Markdown, HTML, JSON, or TXT.",
+                    "description": (
+                        "Write a local export file for one cached Chatalyst "
+                        "conversation in Markdown, HTML, JSON, or TXT."
+                    ),
+                    "annotations": {"readOnlyHint": False, "destructiveHint": False},
                     "inputSchema": {
                         "type": "object",
                         "required": ["conversation_id", "format"],
@@ -370,9 +390,10 @@ class ChatalystMCPServer:
                 {
                     "name": "chatalyst_stage_snippet",
                     "description": (
-                        "Stage text or code from automation into Chatalyst's snippet "
-                        "workspace."
+                        "Stage text or code into Chatalyst's local snippet workspace "
+                        "for later user review. Does not execute terminal commands."
                     ),
+                    "annotations": {"readOnlyHint": False, "destructiveHint": False},
                     "inputSchema": {
                         "type": "object",
                         "required": ["body"],
@@ -387,10 +408,14 @@ class ChatalystMCPServer:
                 {
                     "name": "chatalyst_send_new_message",
                     "description": (
-                        "Create a new ChatGPT chat and send a prompt through the "
-                        "browser session. Uses the configured default project when "
-                        "one is set, unless project_name is provided."
+                        "Create a new ChatGPT conversation through Chatalyst's "
+                        "authenticated browser provider, then send this prompt. "
+                        "Use this for fresh ChatGPT work, including research tasks, "
+                        "when a new conversation is appropriate. Uses the configured "
+                        "default project when one is set, unless project_name is "
+                        "provided."
                     ),
+                    "annotations": {"readOnlyHint": False, "destructiveHint": False},
                     "inputSchema": {
                         "type": "object",
                         "required": ["prompt"],
@@ -408,10 +433,14 @@ class ChatalystMCPServer:
                 {
                     "name": "chatalyst_reply_to_conversation",
                     "description": (
-                        "Open an existing cached ChatGPT conversation and send a reply. "
-                        "conversation_id is optional when the MCP server was launched "
-                        "with a default conversation or project scope."
+                        "Reply in an existing ChatGPT conversation through "
+                        "Chatalyst's authenticated browser provider. Use for "
+                        "conversation handoff, coordination with ChatGPT, or "
+                        "continuing research/work in a scoped existing thread. "
+                        "conversation_id is optional when launched with a default "
+                        "conversation or project scope."
                     ),
+                    "annotations": {"readOnlyHint": False, "destructiveHint": False},
                     "inputSchema": {
                         "type": "object",
                         "required": ["prompt"],

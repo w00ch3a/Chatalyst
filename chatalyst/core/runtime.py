@@ -4,11 +4,21 @@ import asyncio
 import fcntl
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 
 class RuntimeLockError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class RuntimeLockStatus:
+    path: Path
+    exists: bool
+    owner_pid: int | None
+    owner_alive: bool | None
+    locked: bool
 
 
 class RuntimeLock:
@@ -100,3 +110,53 @@ class RuntimeLock:
             return os.read(fd, 64).decode("utf-8", errors="replace").strip()
         except OSError:
             return ""
+
+    @classmethod
+    def status(cls, path: Path) -> RuntimeLockStatus:
+        if not path.exists():
+            return RuntimeLockStatus(
+                path=path,
+                exists=False,
+                owner_pid=None,
+                owner_alive=None,
+                locked=False,
+            )
+        owner_pid = cls._read_owner_from_path(path)
+        owner_alive = cls._pid_alive(owner_pid) if owner_pid is not None else None
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        locked = False
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except BlockingIOError:
+                locked = True
+        finally:
+            os.close(fd)
+        return RuntimeLockStatus(
+            path=path,
+            exists=True,
+            owner_pid=owner_pid,
+            owner_alive=owner_alive,
+            locked=locked,
+        )
+
+    @staticmethod
+    def _read_owner_from_path(path: Path) -> int | None:
+        try:
+            raw = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        if not raw.isdigit():
+            return None
+        return int(raw)
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True

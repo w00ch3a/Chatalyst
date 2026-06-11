@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 
 from chatalyst.core.cache import ChatCache
-from chatalyst.core.models import Conversation, Message, MessageRole, Note, SyncStatus
+from chatalyst.core.models import Conversation, Message, MessageRole, Note, Project, SyncStatus
 
 
 def test_reconcile_conversation_id_rolls_back_on_mid_update_failure(tmp_path):
@@ -44,3 +44,17 @@ def test_reconcile_conversation_id_rolls_back_on_mid_update_failure(tmp_path):
         assert cache.list_notes(old.id)[0].body == "local note"
     finally:
         cache.close()
+
+
+def test_projects_are_listed_with_urls(tmp_path):
+    cache = ChatCache(tmp_path / "chat_cache.db")
+    cache.initialize()
+    try:
+        cache.upsert_project(Project(id="project-2", name="Zulu", url="https://chatgpt.com/g/z"))
+        cache.upsert_project(Project(id="project-1", name="Alpha", url="https://chatgpt.com/g/a"))
+        projects = cache.list_projects()
+    finally:
+        cache.close()
+
+    assert [project.name for project in projects] == ["Alpha", "Zulu"]
+    assert projects[0].url == "https://chatgpt.com/g/a"

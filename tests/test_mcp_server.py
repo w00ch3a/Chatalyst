@@ -9,7 +9,7 @@ import pytest
 from chatalyst.core.chatgpt import PromptSubmittedNoAssistantResponseError
 from chatalyst.core.config import AppConfig
 from chatalyst.core.mcp_server import ChatalystMCPServer, MCPError, _read_stdin_line
-from chatalyst.core.models import Conversation, Message, MessageRole, SyncStatus
+from chatalyst.core.models import Conversation, Message, MessageRole, Project, SyncStatus
 from chatalyst.core.runtime import RuntimeLock
 
 
@@ -35,12 +35,12 @@ def test_mcp_wait_seconds_defaults_to_config(tmp_path):
 def test_mcp_wait_seconds_accepts_valid_override(tmp_path):
     server = _server(tmp_path)
     try:
-        assert server._optional_wait_seconds({"wait_for_response_seconds": 120}) == 120.0
+        assert server._optional_wait_seconds({"wait_for_response_seconds": 900}) == 900.0
     finally:
         server.cache.close()
 
 
-@pytest.mark.parametrize("value", [4, 241, "75"])
+@pytest.mark.parametrize("value", [4, 901, "75"])
 def test_mcp_wait_seconds_rejects_invalid_override(tmp_path, value):
     server = _server(tmp_path)
     try:
@@ -154,6 +154,18 @@ def test_mcp_scope_rejects_blank_default_conversation(tmp_path):
         server.cache.close()
 
 
+def test_mcp_lists_cached_projects(tmp_path):
+    server = _server(tmp_path)
+    server.cache.upsert_project(Project(id="project-1", name="Research"))
+    try:
+        payload = server._tool_list_projects({})
+    finally:
+        server.cache.close()
+
+    assert payload["count"] == 1
+    assert payload["projects"][0]["name"] == "Research"
+
+
 @pytest.mark.asyncio
 async def test_mcp_health_reports_scope_and_cache_counts(tmp_path):
     server = _server(tmp_path)
@@ -174,6 +186,7 @@ async def test_mcp_health_reports_scope_and_cache_counts(tmp_path):
     assert payload["browser"]["checked"] is False
     assert payload["default_project"] == "Research"
     assert payload["default_project_has_cached_conversation"] is True
+    assert payload["runtime_lock"]["exists"] is False
     assert payload["cache_counts"]["conversations"] == 1
 
 

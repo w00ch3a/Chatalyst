@@ -44,7 +44,7 @@ class AppConfig(BaseModel):
     max_stream_idle_seconds: float = 2.0
     live_tool_lock_timeout_seconds: float = 180.0
     assistant_response_timeout_seconds: float = 300.0
-    mcp_live_response_timeout_seconds: float = 75.0
+    mcp_live_response_timeout_seconds: float = 180.0
     mcp_live_result_message_limit: int = 20
     mcp_default_conversation: str | None = None
     mcp_default_project: str | None = None

@@ -43,6 +43,21 @@ def test_runtime_lock_times_out_when_owner_stays_busy(tmp_path):
         first.release()
 
 
+def test_runtime_lock_status_reports_active_owner(tmp_path):
+    lock_path = tmp_path / "runtime.lock"
+    lock = RuntimeLock(lock_path)
+    lock.acquire()
+    try:
+        status = RuntimeLock.status(lock_path)
+    finally:
+        lock.release()
+
+    assert status.exists is True
+    assert status.owner_pid == os.getpid()
+    assert status.owner_alive is True
+    assert status.locked is True
+
+
 def test_runtime_lock_does_not_unlink_empty_locked_file(tmp_path):
     lock_path = tmp_path / "runtime.lock"
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)

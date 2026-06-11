@@ -76,6 +76,7 @@ class ChatCache:
             CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
+                url TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -176,20 +177,51 @@ class ChatCache:
             );
             """
         )
+        self._ensure_column("projects", "url", "TEXT")
         conn.commit()
+
+    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        columns = {
+            str(row["name"])
+            for row in self.connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in columns:
+            self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def upsert_project(self, project: Project) -> None:
         self.connection.execute(
             """
-            INSERT INTO projects (id, name, created_at, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO projects (id, name, url, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
+                url = excluded.url,
                 updated_at = excluded.updated_at
             """,
-            (project.id, project.name, _dt(project.created_at), _dt(project.updated_at)),
+            (
+                project.id,
+                project.name,
+                project.url,
+                _dt(project.created_at),
+                _dt(project.updated_at),
+            ),
         )
         self.connection.commit()
+
+    def list_projects(self) -> list[Project]:
+        rows = self.connection.execute(
+            "SELECT * FROM projects ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+        return [
+            Project(
+                id=row["id"],
+                name=row["name"],
+                url=row["url"],
+                created_at=_parse_dt(row["created_at"]) or utc_now(),
+                updated_at=_parse_dt(row["updated_at"]) or utc_now(),
+            )
+            for row in rows
+        ]
 
     def upsert_conversation(self, conversation: Conversation) -> None:
         now = utc_now()

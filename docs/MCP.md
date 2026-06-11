@@ -40,10 +40,13 @@ Before connecting an MCP client, run a local check:
 
 ```bash
 uv run chatalyst --doctor --mcp --browser-mode provider
+uv run chatalyst --smoke --mcp-read-only --browser-mode provider
 ```
 
 `doctor` does not open ChatGPT. It checks the workspace, private runtime paths,
 cache counts, installed commands, and the MCP tool schema.
+`smoke` does not open ChatGPT either. It exercises MCP initialize, tools/list,
+and `chatalyst_health`.
 
 ## Client Configuration
 
@@ -115,10 +118,10 @@ tools without exports, staged snippets, or live ChatGPT sends.
 ## Health Tool
 
 MCP clients can call `chatalyst_health` before doing live work. By default it
-does not start Chromium; it reports workspace paths, configured scope, cache
-counts, browser mode/profile, and whether a default project has cached
-conversations. Pass `check_browser: true` only when you intentionally want a
-live browser/login check.
+does not start Chromium; it reports workspace paths, configured scope, cached
+projects, runtime lock status, cache counts, browser mode/profile, and whether a
+default project has cached conversations. Pass `check_browser: true` only when
+you intentionally want a live browser/login check.
 
 ## Project Scope Proof
 
@@ -135,6 +138,9 @@ If Chatalyst can send the prompt but cannot prove that the visible ChatGPT page
 and the local cache both agree on the project, the response status is
 `scope_uncertain`. Treat that as a successful send with a project placement
 warning, not as proof that the chat landed in the requested project.
+
+Live send/reply tools accept `wait_for_response_seconds` values up to 900
+seconds for long reasoning or research turns.
 
 ## Selector Diagnostics
 

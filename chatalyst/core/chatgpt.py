@@ -28,6 +28,7 @@ from chatalyst.core.models import (
     LoginState,
     Message,
     MessageRole,
+    Project,
     SyncStatus,
     utc_now,
 )
@@ -111,6 +112,9 @@ class ChatGPTService:
 
     async def discover_chats(self) -> list[Conversation]:
         page = await self.browser.open_chatgpt()
+        projects = await self.extract_projects(page)
+        for project in projects:
+            self.cache.upsert_project(project)
         conversations = await page.evaluate(
             """
             () => Array.from(document.querySelectorAll('a[href*="/c/"]')).map((node) => {
@@ -151,6 +155,35 @@ class ChatGPTService:
             )
         )
         return extracted
+
+    async def extract_projects(self, page: Page) -> list[Project]:
+        raw_projects = await page.evaluate(
+            """
+            () => Array.from(document.querySelectorAll(
+                'a[href*="/g/"], [data-testid*="project"] a'
+            ))
+                .map((node) => {
+                    const href = node.href || node.getAttribute('href') || '';
+                    const name = (node.innerText || node.textContent || '').trim().split('\\n')[0];
+                    return { href, name };
+                })
+                .filter((item) => item.name)
+            """
+        )
+        projects: list[Project] = []
+        seen: set[str] = set()
+        for item in raw_projects:
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            url = str(item.get("href") or "") or None
+            project_id = self._project_id_from_url(url) if url else self._hash_id(name)
+            key = project_id.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            projects.append(Project(id=project_id, name=name, url=url))
+        return projects
 
     async def open_conversation(self, conversation_id: str) -> ExtractionResult:
         cached = self.cache.get_conversation(conversation_id)
@@ -724,6 +757,12 @@ class ChatGPTService:
         if match:
             return match.group(1)
         return self._hash_id(url or "local-chat")
+
+    def _project_id_from_url(self, url: str | None) -> str:
+        match = re.search(r"/g/([^/?#]+)", url or "")
+        if match:
+            return match.group(1)
+        return self._hash_id(url or "local-project")
 
     def _message_id(self, conversation_id: str, role: MessageRole, text: str, ordinal: int) -> str:
         return self._hash_id(f"{conversation_id}:{role.value}:{ordinal}:{text[:256]}")

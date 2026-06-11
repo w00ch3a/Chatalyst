@@ -66,6 +66,7 @@ class ChatalystMCPServer:
             "chatalyst_get_scope": self._tool_get_scope,
             "chatalyst_search": self._tool_search,
             "chatalyst_list_conversations": self._tool_list_conversations,
+            "chatalyst_list_projects": self._tool_list_projects,
             "chatalyst_get_conversation": self._tool_get_conversation,
             "chatalyst_list_bookmarks": self._tool_list_bookmarks,
         }
@@ -175,7 +176,9 @@ class ChatalystMCPServer:
                 else None
             ),
             "default_project_has_cached_conversation": resolved_project is not None,
+            "projects": [project.model_dump(mode="json") for project in self.cache.list_projects()],
             "cache_counts": self._cache_counts(),
+            "runtime_lock": self._runtime_lock_status(),
             "browser": {
                 "checked": False,
                 "state": self.browser.status.browser_state.value if self.browser else "not_started",
@@ -212,6 +215,14 @@ class ChatalystMCPServer:
             "conversations": [
                 conversation.model_dump(mode="json") for conversation in conversations
             ],
+        }
+
+    def _tool_list_projects(self, arguments: JsonObject) -> JsonObject:
+        limit = self._limit(arguments.get("limit"), default=100, maximum=500)
+        projects = self.cache.list_projects()[:limit]
+        return {
+            "projects": [project.model_dump(mode="json") for project in projects],
+            "count": len(projects),
         }
 
     def _tool_get_conversation(self, arguments: JsonObject) -> JsonObject:
@@ -416,6 +427,20 @@ class ChatalystMCPServer:
                 },
             },
             {
+                "name": "chatalyst_list_projects",
+                "description": (
+                    "List locally cached ChatGPT projects discovered from the visible "
+                    "ChatGPT sidebar/project UI."
+                ),
+                "annotations": {"readOnlyHint": True},
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+                    },
+                },
+            },
+            {
                 "name": "chatalyst_get_conversation",
                 "description": (
                     "Read one locally cached Chatalyst conversation with messages, "
@@ -512,7 +537,7 @@ class ChatalystMCPServer:
                             "wait_for_response_seconds": {
                                 "type": "number",
                                 "minimum": 5,
-                                "maximum": 240,
+                                "maximum": 900,
                             },
                         },
                     },
@@ -537,7 +562,7 @@ class ChatalystMCPServer:
                             "wait_for_response_seconds": {
                                 "type": "number",
                                 "minimum": 5,
-                                "maximum": 240,
+                                "maximum": 900,
                             },
                         },
                     },
@@ -605,8 +630,8 @@ class ChatalystMCPServer:
             return self.config.mcp_live_response_timeout_seconds
         if isinstance(value, bool) or not isinstance(value, int | float):
             raise MCPError(-32602, "wait_for_response_seconds must be a number.")
-        if value < 5 or value > 240:
-            raise MCPError(-32602, "wait_for_response_seconds must be between 5 and 240.")
+        if value < 5 or value > 900:
+            raise MCPError(-32602, "wait_for_response_seconds must be between 5 and 900.")
         return float(value)
 
     def _optional_project_name(self, arguments: JsonObject) -> str | None:
@@ -729,6 +754,17 @@ class ChatalystMCPServer:
             row = self.cache.connection.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
             counts[table] = int(row["count"]) if row else 0
         return counts
+
+    def _runtime_lock_status(self) -> JsonObject:
+        status = RuntimeLock.status(self.config.runtime_lock_path)
+        return {
+            "path": str(status.path),
+            "exists": status.exists,
+            "owner_pid": status.owner_pid,
+            "owner_alive": status.owner_alive,
+            "locked": status.locked,
+            "stale": status.exists and not status.locked and status.owner_alive is False,
+        }
 
     def _package_version(self) -> str:
         return package_version()
@@ -935,7 +971,7 @@ def main() -> None:
     parser.add_argument(
         "--mcp-live-response-timeout-seconds",
         type=float,
-        default=75.0,
+        default=180.0,
         help="Default MCP live send/reply wait before returning submitted_no_response.",
     )
     parser.add_argument(

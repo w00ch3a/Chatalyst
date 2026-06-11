@@ -9,6 +9,11 @@ from chatalyst.core.models import Bookmark
 
 
 class BookmarkPanel(ModalScreen[str | None]):
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("ctrl+c", "cancel", "Cancel"),
+    ]
+
     DEFAULT_CSS = """
     BookmarkPanel > Vertical {
         width: 70%;
@@ -36,3 +41,6 @@ class BookmarkPanel(ModalScreen[str | None]):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         self.dismiss(getattr(event.item, "conversation_id", None))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)

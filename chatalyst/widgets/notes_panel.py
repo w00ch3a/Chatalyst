@@ -9,6 +9,11 @@ from chatalyst.core.models import Note
 
 
 class NotesPanel(ModalScreen[str | None]):
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("ctrl+c", "cancel", "Cancel"),
+    ]
+
     DEFAULT_CSS = """
     NotesPanel > Vertical {
         width: 70%;
@@ -33,3 +38,6 @@ class NotesPanel(ModalScreen[str | None]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save-notes":
             self.dismiss(self.editor.text)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)

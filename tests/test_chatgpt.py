@@ -13,8 +13,11 @@ from chatalyst.core.selectors import SelectorGroup
 class FakeProjectPage:
     url = "https://chatgpt.com/g/project-id"
     project_visible = False
+    projects_payload = []
 
     async def evaluate(self, _script, _arg=None):
+        if "href*=\"/g/\"" in _script:
+            return self.projects_payload
         return self.project_visible
 
 
@@ -87,6 +90,29 @@ async def test_unscoped_new_chat_uses_global_new_chat(tmp_path):
 
     assert clicked_new_chat is True
     assert conversation.project_name is None
+
+
+@pytest.mark.asyncio
+async def test_extract_projects_reads_visible_project_links(tmp_path):
+    config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
+    cache = ChatCache(config.database_path)
+    cache.initialize()
+    page = FakeProjectPage()
+    page.projects_payload = [
+        {"href": "https://chatgpt.com/g/project-alpha", "name": "Alpha"},
+        {"href": "https://chatgpt.com/g/project-alpha", "name": "Alpha"},
+        {"href": "", "name": "Loose Project"},
+    ]
+    service = ChatGPTService(config, FakeProjectBrowser(page), cache)  # type: ignore[arg-type]
+    try:
+        projects = await service.extract_projects(page)
+    finally:
+        cache.close()
+
+    assert [(project.id, project.name) for project in projects] == [
+        ("project-alpha", "Alpha"),
+        (service._hash_id("Loose Project"), "Loose Project"),  # noqa: SLF001
+    ]
 
 
 @pytest.mark.asyncio

@@ -49,6 +49,7 @@ class SnippetRunMode(StrEnum):
 class Project(BaseModel):
     id: str
     name: str
+    url: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

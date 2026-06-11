@@ -7,6 +7,11 @@ from textual.widgets import Label, ListItem, ListView
 
 
 class CommandPalette(ModalScreen[str | None]):
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("ctrl+c", "cancel", "Cancel"),
+    ]
+
     DEFAULT_CSS = """
     CommandPalette > Vertical {
         width: 70%;
@@ -44,3 +49,6 @@ class CommandPalette(ModalScreen[str | None]):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         self.dismiss(getattr(event.item, "command", None))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)

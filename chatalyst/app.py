@@ -100,6 +100,7 @@ class ChatGPTTUI(App[None]):
             self.browser = BrowserController(config)
             self.chatgpt = ChatGPTService(config, self.browser, self.cache)
             self.plugins = PluginRegistry()
+            self.plugins.load_from_directory(config.plugins_dir)
             self.plugin_context = PluginContext(config=config, cache=self.cache)
             self.status_model = BrowserSessionStatus(
                 browser_state=BrowserState.STOPPED,
@@ -603,6 +604,8 @@ def run_doctor(config: AppConfig, *, include_mcp: bool, max_text_chars: int) -> 
 
     config.ensure_runtime_dirs()
     server = ChatalystMCPServer(config, read_only=config.offline, max_text_chars=max_text_chars)
+    plugins = PluginRegistry()
+    plugins.load_from_directory(config.plugins_dir)
     try:
         counts = server._cache_counts()
         scope = server._tool_get_scope({})
@@ -639,6 +642,8 @@ def run_doctor(config: AppConfig, *, include_mcp: bool, max_text_chars: int) -> 
         },
         "paths": path_status,
         "cache_counts": counts,
+        "runtime_lock": server._runtime_lock_status(),
+        "plugins": {"count": len(plugins.plugins), "names": list(plugins.names)},
         "scope": scope,
         "mcp": {
             "checked": include_mcp,
@@ -648,6 +653,38 @@ def run_doctor(config: AppConfig, *, include_mcp: bool, max_text_chars: int) -> 
     }
     print(json.dumps(payload, indent=2))
     return 0
+
+
+def run_mcp_smoke(config: AppConfig, *, read_only: bool, max_text_chars: int) -> int:
+    """Run a local MCP JSON-RPC smoke test without opening ChatGPT."""
+
+    config.ensure_runtime_dirs()
+    server = ChatalystMCPServer(config, read_only=read_only, max_text_chars=max_text_chars)
+    requests = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "chatalyst_health", "arguments": {}},
+        },
+    ]
+
+    async def _run() -> list[dict[str, object] | None]:
+        try:
+            return [await server.handle(request) for request in requests]
+        finally:
+            await server.close()
+
+    responses = asyncio.run(_run())
+    failures = [response for response in responses if response and response.get("error")]
+    payload = {
+        "ok": not failures,
+        "responses": responses,
+    }
+    print(json.dumps(payload, indent=2))
+    return 1 if failures else 0
 
 
 def _private_mode(path: Path) -> str | None:
@@ -691,6 +728,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check local Chatalyst workspace, install, vault, and optional MCP schema.",
     )
     parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Run a local MCP smoke test without opening ChatGPT.",
+    )
+    parser.add_argument(
         "--mcp-read-only",
         action="store_true",
         help="When used with --mcp, expose only read-only vault tools.",
@@ -716,7 +758,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mcp-live-response-timeout-seconds",
         type=float,
-        default=75.0,
+        default=180.0,
         help="Default MCP live send/reply wait before returning submitted_no_response.",
     )
     parser.add_argument(
@@ -777,6 +819,8 @@ def main() -> None:
         parser.error("--login cannot be combined with --mcp")
     if args.login and args.doctor:
         parser.error("--login cannot be combined with --doctor")
+    if args.login and args.smoke:
+        parser.error("--login cannot be combined with --smoke")
     browser_mode = "headless" if args.headless else args.browser_mode
     workspace = args.workspace.expanduser().resolve()
     if args.doctor:
@@ -806,6 +850,33 @@ def main() -> None:
         )
         raise SystemExit(
             run_doctor(config, include_mcp=args.mcp, max_text_chars=args.mcp_max_text_chars)
+        )
+    if args.smoke:
+        mcp_browser_mode = browser_mode
+        if not args.mcp_read_only and not args.headless and args.browser_mode == "auto":
+            mcp_browser_mode = "provider"
+        config = AppConfig.from_workspace(
+            workspace,
+            offline=args.offline or args.mcp_read_only,
+            debug=args.debug,
+            headless=args.headless,
+            browser_mode=mcp_browser_mode,
+            browser_profile=args.browser_profile,
+        ).model_copy(
+            update={
+                "assistant_response_timeout_seconds": args.assistant_response_timeout_seconds,
+                "mcp_live_response_timeout_seconds": args.mcp_live_response_timeout_seconds,
+                "mcp_live_result_message_limit": args.mcp_live_result_message_limit,
+                "mcp_default_conversation": args.mcp_default_conversation,
+                "mcp_default_project": args.mcp_default_project,
+            }
+        )
+        raise SystemExit(
+            run_mcp_smoke(
+                config,
+                read_only=args.offline or args.mcp_read_only,
+                max_text_chars=args.mcp_max_text_chars,
+            )
         )
     if args.login:
         config = AppConfig.from_workspace(

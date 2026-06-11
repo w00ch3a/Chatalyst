@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import importlib.util
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+from loguru import logger
 
 from chatalyst.core.cache import ChatCache
 from chatalyst.core.config import AppConfig
@@ -51,8 +55,50 @@ class PluginRegistry:
     def plugins(self) -> tuple[WorkspacePlugin, ...]:
         return tuple(self._plugins)
 
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(getattr(plugin, "name", plugin.__class__.__name__) for plugin in self._plugins)
+
     def register(self, plugin: WorkspacePlugin) -> None:
         self._plugins.append(plugin)
+
+    def load_from_directory(self, plugins_dir: Path) -> None:
+        if not plugins_dir.exists():
+            return
+        for manifest_path in sorted(plugins_dir.glob("*/plugin.json")):
+            self._load_manifest(manifest_path)
+
+    def _load_manifest(self, manifest_path: Path) -> None:
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            module_name = str(manifest.get("module") or "").strip()
+            factory_name = str(manifest.get("factory") or "create_plugin").strip()
+            if not module_name:
+                logger.warning("Plugin manifest {} has no module.", manifest_path)
+                return
+            module_path = (manifest_path.parent / module_name).resolve()
+            plugin_root = manifest_path.parent.resolve()
+            if not module_path.is_file() or plugin_root not in module_path.parents:
+                logger.warning(
+                    "Plugin manifest {} points outside its plugin folder.",
+                    manifest_path,
+                )
+                return
+            spec = importlib.util.spec_from_file_location(
+                f"chatalyst_user_plugin_{manifest_path.parent.name}", module_path
+            )
+            if spec is None or spec.loader is None:
+                logger.warning("Unable to load plugin module from {}", module_path)
+                return
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            factory = getattr(module, factory_name, None)
+            if factory is None:
+                logger.warning("Plugin {} has no factory {}.", module_path, factory_name)
+                return
+            self.register(factory())
+        except Exception:
+            logger.exception("Failed to load plugin manifest {}", manifest_path)
 
     def startup(self, context: PluginContext) -> None:
         for plugin in self._plugins:

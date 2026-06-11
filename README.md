@@ -53,10 +53,13 @@ Local health check:
 ```bash
 uv run chatalyst --doctor
 uv run chatalyst --doctor --mcp
+uv run chatalyst --smoke --mcp-read-only
 ```
 
 `--doctor` prints JSON describing the workspace, private runtime paths, cache
 counts, installed command paths, and MCP tool schema when `--mcp` is included.
+`--smoke` exercises MCP initialize, tools/list, and health without opening
+ChatGPT.
 
 Browser lifecycle modes:
 
@@ -132,6 +135,9 @@ space for local file search, note-vault integration, Git integration, knowledge
 indexing, or document search without coupling those integrations to browser
 automation.
 
+See [docs/Plugins.md](docs/Plugins.md) for the local plugin manifest format and
+a minimal plugin skeleton.
+
 ## MCP Server
 
 Chatalyst includes a local stdio MCP server for automation clients. See
@@ -148,7 +154,7 @@ uv run chatalyst --mcp --headless
 uv run chatalyst --mcp --mcp-read-only
 uv run chatalyst --mcp --offline
 uv run chatalyst --mcp --debug
-uv run chatalyst --mcp --mcp-live-response-timeout-seconds 75
+uv run chatalyst --mcp --mcp-live-response-timeout-seconds 180
 uv run chatalyst --mcp --mcp-default-project "Research"
 uv run chatalyst --mcp --mcp-default-conversation "Daily work thread"
 ```
@@ -212,10 +218,11 @@ provider behind the terminal MCP server and is closed after live ChatGPT
 operations. Use `--headless` only after confirming the saved ChatGPT session
 survives headless launch on that host.
 
-Live send/reply MCP tools wait up to 75 seconds by default for ChatGPT to
+Live send/reply MCP tools wait up to 180 seconds by default for ChatGPT to
 produce a new assistant response. Increase `wait_for_response_seconds` per tool
 call when the MCP host can tolerate it, or change
-`--mcp-live-response-timeout-seconds`. If the user message lands but no
+`--mcp-live-response-timeout-seconds`. Values up to 900 seconds are accepted for
+long reasoning or research turns. If the user message lands but no
 assistant response appears before the timeout, MCP returns
 `status: submitted_no_response` instead of encouraging duplicate resends.
 
@@ -280,6 +287,11 @@ value into one string is not.
 The MCP server can run in full live mode or read-only vault mode. Use the TUI for
 first login, manual ChatGPT browser inspection, and reviewed terminal snippet
 execution.
+
+`chatalyst_health` includes runtime lock status and cached projects. If an MCP
+client appears stuck, run `uv run chatalyst --doctor --mcp` or
+`uv run chatalyst --smoke --mcp-read-only` on that host and check
+`runtime_lock.owner_pid`.
 
 ## Security Notes
 

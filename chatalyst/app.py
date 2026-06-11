@@ -701,6 +701,7 @@ async def run_project_doctor(config: AppConfig, *, project_reference: str | None
         "browser": None,
         "url": None,
         "projects": [],
+        "project_diagnostics": None,
         "open_project": None,
     }
     try:
@@ -712,6 +713,8 @@ async def run_project_doctor(config: AppConfig, *, project_reference: str | None
         for project in projects:
             cache.upsert_project(project)
         payload["projects"] = [project.model_dump(mode="json") for project in projects]
+        if not projects:
+            payload["project_diagnostics"] = await chatgpt.project_diagnostics(page)
         if project_reference:
             try:
                 await chatgpt._open_project(page, project_reference)  # noqa: SLF001

@@ -159,15 +159,49 @@ class ChatGPTService:
     async def extract_projects(self, page: Page) -> list[Project]:
         raw_projects = await page.evaluate(
             """
-            () => Array.from(document.querySelectorAll(
-                'a[href*="/g/"], [data-testid*="project"] a'
-            ))
-                .map((node) => {
-                    const href = node.href || node.getAttribute('href') || '';
-                    const name = (node.innerText || node.textContent || '').trim().split('\\n')[0];
-                    return { href, name };
-                })
-                .filter((item) => item.name)
+            () => {
+                const projectish = [
+                    'a[href*="/g/"]',
+                    '[data-testid*="project"]',
+                    '[aria-label*="project" i]',
+                    '[aria-label*="projects" i]',
+                    '[role="treeitem"]',
+                    '[role="menuitem"]',
+                    'nav a',
+                    'aside a',
+                    'nav button',
+                    'aside button'
+                ].join(', ');
+                const blockedLabels = new Set([
+                    'new chat',
+                    'explore gpts',
+                    'library',
+                    'search chats',
+                    'chatgpt'
+                ]);
+                return Array.from(document.querySelectorAll(projectish))
+                    .map((node) => {
+                        const href = node.href || node.getAttribute('href') || '';
+                        const aria = node.getAttribute('aria-label') || '';
+                        const testid = node.getAttribute('data-testid') || '';
+                        const rawText = (node.innerText || node.textContent || aria || '').trim();
+                        const name = rawText
+                            .split('\\n')
+                            .map((part) => part.trim())
+                            .filter(Boolean)[0] || '';
+                        const lower = `${href} ${aria} ${testid} ${name}`.toLowerCase();
+                        const isProject = href.includes('/g/')
+                            || lower.includes('project')
+                            || lower.includes('projects');
+                        return { href, name, aria, testid, isProject };
+                    })
+                    .filter((item) => {
+                        const normalized = item.name.toLowerCase();
+                        return item.name
+                            && item.isProject
+                            && !blockedLabels.has(normalized);
+                    });
+            }
             """
         )
         projects: list[Project] = []
@@ -184,6 +218,38 @@ class ChatGPTService:
             seen.add(key)
             projects.append(Project(id=project_id, name=name, url=url))
         return projects
+
+    async def project_diagnostics(self, page: Page) -> dict[str, object]:
+        return await page.evaluate(
+            """
+            () => {
+                const nodes = Array.from(document.querySelectorAll(
+                    'nav, aside, [role="navigation"], [role="tree"], [role="menu"]'
+                ));
+                const candidates = Array.from(document.querySelectorAll(
+                    'a, button, [role="treeitem"], [role="menuitem"], [data-testid]'
+                ))
+                    .slice(0, 200)
+                    .map((node) => ({
+                        tag: node.tagName.toLowerCase(),
+                        text: (node.innerText || node.textContent || '').trim().slice(0, 120),
+                        href: node.href || node.getAttribute('href') || '',
+                        aria: node.getAttribute('aria-label') || '',
+                        testid: node.getAttribute('data-testid') || '',
+                        role: node.getAttribute('role') || ''
+                    }))
+                    .filter((item) => item.text || item.href || item.aria || item.testid);
+                return {
+                    nav_count: nodes.length,
+                    body_text_sample: (document.body?.innerText || '')
+                        .replace(/\\s+/g, ' ')
+                        .trim()
+                        .slice(0, 2000),
+                    candidates
+                };
+            }
+            """
+        )
 
     async def open_conversation(self, conversation_id: str) -> ExtractionResult:
         cached = self.cache.get_conversation(conversation_id)

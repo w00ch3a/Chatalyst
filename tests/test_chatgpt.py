@@ -22,8 +22,10 @@ class FakeProjectPage:
         return None
 
     async def evaluate(self, _script, _arg=None):
-        if "href*=\"/g/\"" in _script:
+        if "projectish" in _script:
             return self.projects_payload
+        if "nav_count" in _script:
+            return {"nav_count": 0, "body_text_sample": "", "candidates": []}
         return self.project_visible
 
 
@@ -149,6 +151,26 @@ async def test_extract_projects_reads_visible_project_links(tmp_path):
         ("project-alpha", "Alpha"),
         (service._hash_id("Loose Project"), "Loose Project"),  # noqa: SLF001
     ]
+
+
+@pytest.mark.asyncio
+async def test_extract_projects_reads_project_rows_without_links(tmp_path):
+    config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
+    cache = ChatCache(config.database_path)
+    cache.initialize()
+    page = FakeProjectPage()
+    page.projects_payload = [
+        {"href": "", "name": "Work", "aria": "Project Work", "testid": "", "isProject": True},
+    ]
+    service = ChatGPTService(config, FakeProjectBrowser(page), cache)  # type: ignore[arg-type]
+    try:
+        projects = await service.extract_projects(page)
+    finally:
+        cache.close()
+
+    assert len(projects) == 1
+    assert projects[0].name == "Work"
+    assert projects[0].url is None
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ import inspect
 import json
 import sys
 from collections.abc import Awaitable, Callable
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,7 @@ class ChatalystMCPServer:
         self.browser: BrowserController | None = None
         self.chatgpt: ChatGPTService | None = None
         self._tool_handlers: dict[str, ToolHandler] = {
+            "chatalyst_health": self._tool_health,
             "chatalyst_get_scope": self._tool_get_scope,
             "chatalyst_search": self._tool_search,
             "chatalyst_list_conversations": self._tool_list_conversations,
@@ -149,6 +151,49 @@ class ChatalystMCPServer:
             "results": [result.model_dump(mode="json") for result in results],
         }
 
+    async def _tool_health(self, arguments: JsonObject) -> JsonObject:
+        check_browser = self._optional_bool(arguments, "check_browser", default=False)
+        resolved_conversation = self._resolve_scoped_conversation(required=False)
+        resolved_project = (
+            self._find_recent_project_conversation(self.config.mcp_default_project)
+            if self.config.mcp_default_project
+            else None
+        )
+        payload: JsonObject = {
+            "version": self._package_version(),
+            "workspace": str(self.config.workspace),
+            "database_path": str(self.config.database_path),
+            "read_only": self.read_only,
+            "offline": self.config.offline,
+            "browser_mode": self.config.browser_mode.value,
+            "browser_profile": self.config.browser_profile.value,
+            "default_conversation": self.config.mcp_default_conversation,
+            "default_project": self.config.mcp_default_project,
+            "resolved_conversation": (
+                resolved_conversation.model_dump(mode="json")
+                if resolved_conversation is not None
+                else None
+            ),
+            "default_project_has_cached_conversation": resolved_project is not None,
+            "cache_counts": self._cache_counts(),
+            "browser": {
+                "checked": False,
+                "state": self.browser.status.browser_state.value if self.browser else "not_started",
+                "login_state": self.browser.status.login_state.value if self.browser else "unknown",
+            },
+        }
+        if check_browser:
+            chatgpt = await self._live_chatgpt()
+            status = await chatgpt.status()
+            payload["browser"] = {
+                "checked": True,
+                "state": status.browser_state.value,
+                "login_state": status.login_state.value,
+                "diagnostic": status.diagnostic,
+            }
+            await self._park_browser()
+        return payload
+
     def _tool_get_scope(self, arguments: JsonObject) -> JsonObject:
         del arguments
         conversation = self._resolve_scoped_conversation(required=False)
@@ -174,7 +219,12 @@ class ChatalystMCPServer:
         conversation = self.cache.get_conversation(conversation_id)
         if conversation is None:
             raise MCPError(-32602, f"Conversation not found: {conversation_id}")
-        messages = self.cache.list_messages(conversation_id)
+        include_messages = self._optional_bool(arguments, "include_messages", default=True)
+        all_messages = self.cache.list_messages(conversation_id)
+        message_count = len(all_messages)
+        messages: list[Message] = []
+        if include_messages:
+            messages = self._bounded_messages(all_messages, arguments)
         notes = self.cache.list_notes(conversation_id)
         tags = self.cache.list_tags(conversation_id)
         stats = self.cache.conversation_stats(conversation_id)
@@ -184,6 +234,9 @@ class ChatalystMCPServer:
             "notes": [note.model_dump(mode="json") for note in notes],
             "tags": [tag.model_dump(mode="json") for tag in tags],
             "stats": stats.model_dump(mode="json") if stats else None,
+            "message_count": message_count,
+            "messages_returned": len(messages),
+            "messages_truncated": include_messages and len(messages) < message_count,
         }
 
     def _tool_list_bookmarks(self, arguments: JsonObject) -> JsonObject:
@@ -295,6 +348,23 @@ class ChatalystMCPServer:
     def _tools(self) -> list[JsonObject]:
         tools = [
             {
+                "name": "chatalyst_health",
+                "description": (
+                    "Return Chatalyst MCP health, local vault counts, configured scope, "
+                    "browser mode/profile, and optional live browser login status."
+                ),
+                "annotations": {"readOnlyHint": True},
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "check_browser": {
+                            "type": "boolean",
+                            "description": "When true, briefly starts the browser provider.",
+                        }
+                    },
+                },
+            },
+            {
                 "name": "chatalyst_get_scope",
                 "description": (
                     "Show Chatalyst's configured default conversation/project scope. "
@@ -344,7 +414,13 @@ class ChatalystMCPServer:
                 "inputSchema": {
                     "type": "object",
                     "required": ["conversation_id"],
-                    "properties": {"conversation_id": {"type": "string"}},
+                    "properties": {
+                        "conversation_id": {"type": "string"},
+                        "include_messages": {"type": "boolean"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+                        "offset": {"type": "integer", "minimum": 0},
+                        "before_ordinal": {"type": "integer", "minimum": 0},
+                    },
                 },
             },
             {
@@ -496,6 +572,22 @@ class ChatalystMCPServer:
             raise MCPError(-32602, "limit must be a positive integer.")
         return min(value, maximum)
 
+    def _optional_bool(self, data: JsonObject, key: str, *, default: bool) -> bool:
+        value = data.get(key)
+        if value is None:
+            return default
+        if not isinstance(value, bool):
+            raise MCPError(-32602, f"{key} must be a boolean.")
+        return value
+
+    def _optional_nonnegative_int(self, data: JsonObject, key: str) -> int | None:
+        value = data.get(key)
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise MCPError(-32602, f"{key} must be a non-negative integer.")
+        return value
+
     def _optional_wait_seconds(self, arguments: JsonObject) -> float:
         value = arguments.get("wait_for_response_seconds")
         if value is None:
@@ -602,6 +694,36 @@ class ChatalystMCPServer:
             if normalized in (conversation.project_name or "").casefold():
                 return conversation
         return None
+
+    def _bounded_messages(
+        self,
+        messages: list[Message],
+        arguments: JsonObject,
+    ) -> list[Message]:
+        limit = self._limit(arguments.get("limit"), default=50, maximum=500)
+        offset = self._optional_nonnegative_int(arguments, "offset")
+        before_ordinal = self._optional_nonnegative_int(arguments, "before_ordinal")
+        if offset is not None and before_ordinal is not None:
+            raise MCPError(-32602, "offset and before_ordinal cannot be combined.")
+        if before_ordinal is not None:
+            return [message for message in messages if message.ordinal < before_ordinal][-limit:]
+        if offset is not None:
+            return messages[offset : offset + limit]
+        return messages[-limit:]
+
+    def _cache_counts(self) -> JsonObject:
+        tables = ("projects", "conversations", "messages", "notes", "tags", "bookmarks")
+        counts: JsonObject = {}
+        for table in tables:
+            row = self.cache.connection.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
+            counts[table] = int(row["count"]) if row else 0
+        return counts
+
+    def _package_version(self) -> str:
+        try:
+            return version("chatalyst")
+        except PackageNotFoundError:
+            return "0.1.0"
 
     def _require_write_enabled(self) -> None:
         if self.read_only:

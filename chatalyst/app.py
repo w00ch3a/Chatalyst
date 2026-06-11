@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import shutil
 import sys
 import termios
 import tty
@@ -595,6 +597,64 @@ def wait_for_terminal_return(stdin: TextIO | None = None) -> bool:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
 
 
+def run_doctor(config: AppConfig, *, include_mcp: bool, max_text_chars: int) -> int:
+    """Run local configuration checks without opening ChatGPT."""
+
+    config.ensure_runtime_dirs()
+    server = ChatalystMCPServer(config, read_only=config.offline, max_text_chars=max_text_chars)
+    try:
+        counts = server._cache_counts()
+        scope = server._tool_get_scope({})
+        tools = server._tools() if include_mcp else []
+    finally:
+        server.cache.close()
+
+    paths = {
+        "workspace": config.workspace,
+        "database": config.database_path,
+        "profile": config.profile_dir,
+        "logs": config.logs_dir,
+        "exports": config.exports_dir,
+        "snippets": config.snippets_dir,
+    }
+    path_status = {
+        name: {
+            "path": str(path),
+            "exists": path.exists(),
+            "private_mode": _private_mode(path),
+        }
+        for name, path in paths.items()
+    }
+    payload = {
+        "ok": True,
+        "workspace": str(config.workspace),
+        "offline": config.offline,
+        "browser_mode": config.browser_mode.value,
+        "browser_profile": config.browser_profile.value,
+        "commands": {
+            "chatalyst": shutil.which("chatalyst"),
+            "chatalyst-mcp": shutil.which("chatalyst-mcp"),
+            "chatgpt-tui": shutil.which("chatgpt-tui"),
+        },
+        "paths": path_status,
+        "cache_counts": counts,
+        "scope": scope,
+        "mcp": {
+            "checked": include_mcp,
+            "tool_count": len(tools),
+            "tools": [tool["name"] for tool in tools],
+        },
+    }
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+def _private_mode(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return oct(path.stat().st_mode & 0o777)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="chatalyst")
     parser.add_argument(
@@ -616,7 +676,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mcp",
         action="store_true",
-        help="Run the local-vault MCP server over stdio instead of the TUI.",
+        help="Run/check the local-vault MCP server instead of the TUI.",
+    )
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Check local Chatalyst workspace, install, vault, and optional MCP schema.",
     )
     parser.add_argument(
         "--mcp-read-only",
@@ -703,8 +768,38 @@ def main() -> None:
     args = parser.parse_args()
     if args.login and args.mcp:
         parser.error("--login cannot be combined with --mcp")
+    if args.login and args.doctor:
+        parser.error("--login cannot be combined with --doctor")
     browser_mode = "headless" if args.headless else args.browser_mode
     workspace = args.workspace.expanduser().resolve()
+    if args.doctor:
+        mcp_browser_mode = browser_mode
+        if (
+            args.mcp
+            and not args.mcp_read_only
+            and not args.headless
+            and args.browser_mode == "auto"
+        ):
+            mcp_browser_mode = "provider"
+        config = AppConfig.from_workspace(
+            workspace,
+            offline=args.offline or args.mcp_read_only,
+            debug=args.debug,
+            headless=args.headless,
+            browser_mode=mcp_browser_mode,
+            browser_profile=args.browser_profile,
+        ).model_copy(
+            update={
+                "assistant_response_timeout_seconds": args.assistant_response_timeout_seconds,
+                "mcp_live_response_timeout_seconds": args.mcp_live_response_timeout_seconds,
+                "mcp_live_result_message_limit": args.mcp_live_result_message_limit,
+                "mcp_default_conversation": args.mcp_default_conversation,
+                "mcp_default_project": args.mcp_default_project,
+            }
+        )
+        raise SystemExit(
+            run_doctor(config, include_mcp=args.mcp, max_text_chars=args.mcp_max_text_chars)
+        )
     if args.login:
         config = AppConfig.from_workspace(
             workspace,

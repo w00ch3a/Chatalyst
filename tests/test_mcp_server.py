@@ -155,6 +155,97 @@ def test_mcp_scope_rejects_blank_default_conversation(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_mcp_health_reports_scope_and_cache_counts(tmp_path):
+    server = _server(tmp_path)
+    conversation = Conversation(
+        id="chat-1",
+        title="Health Chat",
+        project_name="Research",
+        sync_status=SyncStatus.CACHED,
+    )
+    server.cache.upsert_conversation(conversation)
+    server.config = server.config.model_copy(update={"mcp_default_project": "Research"})
+    try:
+        payload = await server._tool_health({})
+    finally:
+        server.cache.close()
+
+    assert payload["workspace"] == str(tmp_path)
+    assert payload["browser"]["checked"] is False
+    assert payload["default_project"] == "Research"
+    assert payload["default_project_has_cached_conversation"] is True
+    assert payload["cache_counts"]["conversations"] == 1
+
+
+def test_mcp_get_conversation_returns_recent_messages_by_default(tmp_path):
+    server = _server(tmp_path)
+    conversation = Conversation(
+        id="chat-1",
+        title="Long Chat",
+        sync_status=SyncStatus.CACHED,
+    )
+    server.cache.upsert_conversation(conversation)
+    for ordinal in range(60):
+        server.cache.upsert_message(
+            Message(
+                id=f"msg-{ordinal}",
+                conversation_id=conversation.id,
+                role=MessageRole.USER,
+                markdown=f"message {ordinal}",
+                ordinal=ordinal,
+            )
+        )
+    try:
+        payload = server._tool_get_conversation({"conversation_id": conversation.id})
+    finally:
+        server.cache.close()
+
+    assert payload["message_count"] == 60
+    assert payload["messages_returned"] == 50
+    assert payload["messages_truncated"] is True
+    assert payload["messages"][0]["markdown"] == "message 10"
+    assert payload["messages"][-1]["markdown"] == "message 59"
+
+
+def test_mcp_get_conversation_supports_offset_and_no_messages(tmp_path):
+    server = _server(tmp_path)
+    conversation = Conversation(
+        id="chat-1",
+        title="Windowed Chat",
+        sync_status=SyncStatus.CACHED,
+    )
+    server.cache.upsert_conversation(conversation)
+    for ordinal in range(5):
+        server.cache.upsert_message(
+            Message(
+                id=f"msg-{ordinal}",
+                conversation_id=conversation.id,
+                role=MessageRole.USER,
+                markdown=f"message {ordinal}",
+                ordinal=ordinal,
+            )
+        )
+    try:
+        window = server._tool_get_conversation(
+            {"conversation_id": conversation.id, "offset": 1, "limit": 2}
+        )
+        metadata_only = server._tool_get_conversation(
+            {"conversation_id": conversation.id, "include_messages": False}
+        )
+    finally:
+        server.cache.close()
+
+    assert [message["markdown"] for message in window["messages"]] == [
+        "message 1",
+        "message 2",
+    ]
+    assert metadata_only["messages"] == []
+    assert metadata_only["message_count"] == 5
+    assert metadata_only["messages_returned"] == 0
+    assert metadata_only["messages_truncated"] is False
+
+
+@pytest.mark.asyncio
 async def test_mcp_internal_errors_are_sanitized(tmp_path):
     server = _server(tmp_path)
 

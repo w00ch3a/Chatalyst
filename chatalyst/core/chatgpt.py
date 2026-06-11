@@ -193,6 +193,9 @@ class ChatGPTService:
         page = await self.browser.open_chatgpt()
         starting_url = page.url
         conversation_id = self._conversation_id_from_url(starting_url)
+        conversation_project_name = self._conversation_project_name(
+            conversation_id, project_name
+        )
         await self._wait_until_chatgpt_idle(page)
         baseline_messages = await self.extract_messages(page, conversation_id)
         if self.cache.get_conversation(conversation_id) is None:
@@ -202,7 +205,7 @@ class ChatGPTService:
                     title="New Chat",
                     url=starting_url,
                     chat_identifier=conversation_id,
-                    project_name=project_name,
+                    project_name=conversation_project_name,
                     sync_status=SyncStatus.SYNCING,
                 )
             )
@@ -297,7 +300,7 @@ class ChatGPTService:
                     title=await self._extract_title(page, "New Chat"),
                     url=page.url,
                     chat_identifier=actual_conversation_id,
-                    project_name=project_name,
+                    project_name=conversation_project_name,
                     sync_status=SyncStatus.CACHED,
                 )
                 self.cache.reconcile_conversation_id(conversation_id, conversation)
@@ -342,7 +345,7 @@ class ChatGPTService:
                     title=await self._extract_title(page, "New Chat"),
                     url=page.url,
                     chat_identifier=actual_conversation_id,
-                    project_name=project_name,
+                    project_name=conversation_project_name,
                     sync_status=SyncStatus.CACHED,
                 )
                 self.cache.reconcile_conversation_id(user_message.conversation_id, conversation)
@@ -419,6 +422,16 @@ class ChatGPTService:
         except PlaywrightTimeoutError:
             pass
         await self._wait_for_any(page, self.selectors.composer)
+
+    def _conversation_project_name(
+        self, conversation_id: str, project_name: str | None
+    ) -> str | None:
+        normalized = project_name.strip() if project_name else None
+        if normalized:
+            return normalized
+        cached = self.cache.get_conversation(conversation_id)
+        cached_project = cached.project_name.strip() if cached and cached.project_name else None
+        return cached_project or None
 
     async def extract_messages(self, page: Page, conversation_id: str) -> list[Message]:
         raw_messages = await page.evaluate(

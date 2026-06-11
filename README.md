@@ -8,6 +8,10 @@ exports, and future plugins.
 
 ## Install
 
+Chatalyst runs on any local macOS or Linux machine that can run Python, `uv`,
+and Playwright Chromium. It does not require a Raspberry Pi or appliance-style
+host.
+
 ```bash
 uv sync
 uv run playwright install chromium
@@ -43,6 +47,16 @@ Offline cache mode:
 ```bash
 uv run chatalyst --offline
 ```
+
+Local health check:
+
+```bash
+uv run chatalyst --doctor
+uv run chatalyst --doctor --mcp
+```
+
+`--doctor` prints JSON describing the workspace, private runtime paths, cache
+counts, installed command paths, and MCP tool schema when `--mcp` is included.
 
 Browser lifecycle modes:
 
@@ -120,7 +134,9 @@ automation.
 
 ## MCP Server
 
-Chatalyst includes a local stdio MCP server for automation clients:
+Chatalyst includes a local stdio MCP server for automation clients. See
+[docs/MCP.md](docs/MCP.md) for local macOS/Linux setup notes and client JSON
+examples.
 
 ```bash
 uv run chatalyst-mcp
@@ -140,6 +156,7 @@ uv run chatalyst --mcp --mcp-default-conversation "Daily work thread"
 It exposes the local knowledge vault, not raw browser or terminal control. The
 first tool set includes:
 
+- `chatalyst_health`
 - `chatalyst_search`
 - `chatalyst_list_conversations`
 - `chatalyst_get_conversation`

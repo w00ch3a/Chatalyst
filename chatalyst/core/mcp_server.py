@@ -301,11 +301,22 @@ class ChatalystMCPServer:
                 chatgpt = await self._live_chatgpt()
                 try:
                     await chatgpt.new_chat(project_name=project_name)
-                    return await self._send_prompt_and_payload(
+                    result = await self._send_prompt_and_payload(
                         prompt,
                         wait_seconds=wait_seconds,
                         project_name=project_name,
                     )
+                    if project_name is not None:
+                        scope = await chatgpt.verify_project_scope(project_name)
+                        result["scope"] = {
+                            "requested_project": scope.requested_project,
+                            "verified": scope.verified,
+                            "reason": scope.reason,
+                            "url": scope.url,
+                        }
+                        if not scope.verified and result.get("status") is None:
+                            result["status"] = "scope_uncertain"
+                    return result
                 finally:
                     await self._park_browser()
         except RuntimeLockError as exc:

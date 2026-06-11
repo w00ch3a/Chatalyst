@@ -449,6 +449,14 @@ async def test_mcp_send_new_message_uses_default_project(tmp_path):
                 ordinal=1,
             )
 
+        async def verify_project_scope(self, project_name):
+            return SimpleNamespace(
+                requested_project=project_name,
+                verified=True,
+                reason="visible_project_and_cache_match",
+                url="https://chatgpt.com/c/chat-1",
+            )
+
     chatgpt = ProjectChatGPT()
 
     async def live_chatgpt():
@@ -498,6 +506,14 @@ async def test_mcp_send_new_message_allows_project_override(tmp_path):
                 ordinal=1,
             )
 
+        async def verify_project_scope(self, project_name):
+            return SimpleNamespace(
+                requested_project=project_name,
+                verified=True,
+                reason="visible_project_and_cache_match",
+                url="https://chatgpt.com/c/chat-1",
+            )
+
     chatgpt = ProjectChatGPT()
 
     async def live_chatgpt():
@@ -515,6 +531,64 @@ async def test_mcp_send_new_message_allows_project_override(tmp_path):
         server.cache.close()
 
     assert chatgpt.new_chat_project_name == "Ops"
+
+
+@pytest.mark.asyncio
+async def test_mcp_send_new_message_reports_uncertain_project_scope(tmp_path):
+    server = _server(tmp_path)
+    conversation = Conversation(
+        id="chat-1",
+        title="Project Chat",
+        project_name="Research",
+        sync_status=SyncStatus.CACHED,
+    )
+    server.cache.upsert_conversation(conversation)
+    server.config = server.config.model_copy(update={"mcp_default_project": "Research"})
+
+    class ProjectChatGPT:
+        async def new_chat(self, *, project_name=None):
+            return conversation
+
+        async def send_message(self, prompt, *, response_timeout_seconds=None, project_name=None):
+            yield Message(
+                id="msg-1",
+                conversation_id=conversation.id,
+                role=MessageRole.ASSISTANT,
+                markdown="ok",
+                ordinal=1,
+            )
+
+        async def verify_project_scope(self, project_name):
+            return SimpleNamespace(
+                requested_project=project_name,
+                verified=False,
+                reason="cache_match_only",
+                url="https://chatgpt.com/c/chat-1",
+            )
+
+    chatgpt = ProjectChatGPT()
+
+    async def live_chatgpt():
+        server.chatgpt = chatgpt  # type: ignore[assignment]
+        return chatgpt
+
+    async def park_browser():
+        return None
+
+    server._live_chatgpt = live_chatgpt  # type: ignore[method-assign]
+    server._park_browser = park_browser  # type: ignore[method-assign]
+    try:
+        payload = await server._tool_send_new_message({"prompt": "hello"})
+    finally:
+        server.cache.close()
+
+    assert payload["status"] == "scope_uncertain"
+    assert payload["scope"] == {
+        "requested_project": "Research",
+        "verified": False,
+        "reason": "cache_match_only",
+        "url": "https://chatgpt.com/c/chat-1",
+    }
 
 
 @pytest.mark.asyncio

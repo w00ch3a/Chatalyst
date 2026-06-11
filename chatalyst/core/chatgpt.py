@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from pathlib import Path
 
+from loguru import logger
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -55,6 +58,14 @@ class PromptSubmittedNoAssistantResponseError(RuntimeError):
 
 class ProjectSelectionError(RuntimeError):
     """Raised when a requested ChatGPT project is not visible in the browser UI."""
+
+
+@dataclass(frozen=True)
+class ProjectScopeState:
+    requested_project: str
+    verified: bool
+    reason: str
+    url: str | None
 
 
 class ChatGPTService:
@@ -423,6 +434,70 @@ class ChatGPTService:
             pass
         await self._wait_for_any(page, self.selectors.composer)
 
+    async def verify_project_scope(self, project_name: str) -> ProjectScopeState:
+        page = await self.browser.start()
+        normalized = project_name.strip()
+        if not normalized:
+            return ProjectScopeState(
+                requested_project=project_name,
+                verified=False,
+                reason="blank_project",
+                url=page.url,
+            )
+        visible = await page.evaluate(
+            """
+            (projectName) => {
+                const normalized = projectName.trim().toLowerCase();
+                const selectors = [
+                    'a[aria-current="page"]',
+                    '[aria-current="page"]',
+                    '[data-testid*="project"]',
+                    'nav [role="treeitem"]',
+                    'main header',
+                    'main h1',
+                    'aside a'
+                ].join(', ');
+                return Array.from(document.querySelectorAll(selectors))
+                    .map((node) => (node.innerText || node.textContent || '').trim())
+                    .filter(Boolean)
+                    .some((text) => text.toLowerCase().includes(normalized));
+            }
+            """,
+            normalized,
+        )
+        conversation_id = self._conversation_id_from_url(page.url)
+        cached = self.cache.get_conversation(conversation_id)
+        cached_match = (
+            (cached.project_name or "").casefold() == normalized.casefold() if cached else False
+        )
+        if bool(visible) and cached_match:
+            return ProjectScopeState(
+                requested_project=normalized,
+                verified=True,
+                reason="visible_project_and_cache_match",
+                url=page.url,
+            )
+        if bool(visible):
+            return ProjectScopeState(
+                requested_project=normalized,
+                verified=False,
+                reason="visible_project_but_cache_not_reconciled",
+                url=page.url,
+            )
+        if cached_match:
+            return ProjectScopeState(
+                requested_project=normalized,
+                verified=False,
+                reason="cache_match_only",
+                url=page.url,
+            )
+        return ProjectScopeState(
+            requested_project=normalized,
+            verified=False,
+            reason="project_not_visible_after_send",
+            url=page.url,
+        )
+
     def _conversation_project_name(
         self, conversation_id: str, project_name: str | None
     ) -> str | None:
@@ -525,7 +600,54 @@ class ChatGPTService:
                 {"group": group.name, "url": page.url, "attempted": list(group.candidates)},
             )
         )
+        await self._write_selector_diagnostic(page, diagnostic)
         raise SelectorResolutionError(diagnostic)
+
+    async def _write_selector_diagnostic(
+        self,
+        page: Page,
+        diagnostic: SelectorDiagnostic,
+    ) -> Path | None:
+        try:
+            root = self.config.logs_dir / f"selector-failure-{utc_now().strftime('%Y%m%d-%H%M%S')}"
+            root.mkdir(parents=True, exist_ok=True)
+            root.chmod(0o700)
+            files: dict[str, str] = {
+                "url.txt": page.url or "",
+                "title.txt": await page.title(),
+                "selectors.json": json.dumps(
+                    {
+                        "selector_group": diagnostic.selector_group,
+                        "attempted": list(diagnostic.attempted),
+                        "url": diagnostic.url,
+                        "message": diagnostic.message,
+                    },
+                    indent=2,
+                ),
+                "visible-text-sample.txt": str(
+                    await page.evaluate(
+                        """
+                        () => {
+                            const text = (document.body?.innerText || '')
+                                .replace(/\\s+/g, ' ')
+                                .trim();
+                            return text.slice(0, 2000);
+                        }
+                        """
+                    )
+                ),
+            }
+            for name, body in files.items():
+                path = root / name
+                path.write_text(body, encoding="utf-8")
+                path.chmod(0o600)
+            screenshot_path = root / "screenshot.png"
+            await page.screenshot(path=str(screenshot_path), full_page=False)
+            screenshot_path.chmod(0o600)
+            return root
+        except Exception as exc:
+            logger.warning("Unable to write selector diagnostic pack: {}", exc)
+            return None
 
     async def _wait_for_any(self, page: Page, group: SelectorGroup) -> None:
         await self._locator(page, group)

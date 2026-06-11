@@ -1,20 +1,29 @@
 from __future__ import annotations
 
 import pytest
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from chatalyst.core.cache import ChatCache
-from chatalyst.core.chatgpt import ChatGPTService
+from chatalyst.core.chatgpt import ChatGPTService, SelectorResolutionError
 from chatalyst.core.config import AppConfig
 from chatalyst.core.models import Conversation, Message, MessageRole, SyncStatus
+from chatalyst.core.selectors import SelectorGroup
 
 
 class FakeProjectPage:
     url = "https://chatgpt.com/g/project-id"
+    project_visible = False
+
+    async def evaluate(self, _script, _arg=None):
+        return self.project_visible
 
 
 class FakeProjectBrowser:
     def __init__(self, page: FakeProjectPage) -> None:
         self.page = page
+
+    async def start(self) -> FakeProjectPage:
+        return self.page
 
     async def open_chatgpt(self) -> FakeProjectPage:
         return self.page
@@ -164,3 +173,114 @@ async def test_project_name_survives_send_message_url_reconciliation(tmp_path):
     assert [message.markdown for message in messages] == ["Hi", "Hi"]
     assert reconciled is not None
     assert reconciled.project_name == "Research"
+
+
+@pytest.mark.asyncio
+async def test_project_scope_verifies_only_when_browser_and_cache_match(tmp_path):
+    config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
+    cache = ChatCache(config.database_path)
+    cache.initialize()
+    page = FakeProjectPage()
+    page.url = "https://chatgpt.com/c/chat-1"
+    page.project_visible = True
+    cache.upsert_conversation(
+        Conversation(
+            id="chat-1",
+            title="Project Chat",
+            project_name="Research",
+            sync_status=SyncStatus.CACHED,
+        )
+    )
+    service = ChatGPTService(config, FakeProjectBrowser(page), cache)  # type: ignore[arg-type]
+    try:
+        scope = await service.verify_project_scope("Research")
+    finally:
+        cache.close()
+
+    assert scope.verified is True
+    assert scope.reason == "visible_project_and_cache_match"
+    assert scope.url == "https://chatgpt.com/c/chat-1"
+
+
+@pytest.mark.asyncio
+async def test_project_scope_marks_cache_only_match_as_uncertain(tmp_path):
+    config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
+    cache = ChatCache(config.database_path)
+    cache.initialize()
+    page = FakeProjectPage()
+    page.url = "https://chatgpt.com/c/chat-1"
+    page.project_visible = False
+    cache.upsert_conversation(
+        Conversation(
+            id="chat-1",
+            title="Project Chat",
+            project_name="Research",
+            sync_status=SyncStatus.CACHED,
+        )
+    )
+    service = ChatGPTService(config, FakeProjectBrowser(page), cache)  # type: ignore[arg-type]
+    try:
+        scope = await service.verify_project_scope("Research")
+    finally:
+        cache.close()
+
+    assert scope.verified is False
+    assert scope.reason == "cache_match_only"
+
+
+class FailingLocator:
+    async def wait_for(self, *, timeout):
+        raise PlaywrightTimeoutError("selector missing")
+
+
+class FailingLocatorHandle:
+    @property
+    def first(self):
+        return FailingLocator()
+
+
+class DiagnosticPage(FakeProjectPage):
+    url = "https://chatgpt.com/"
+
+    def locator(self, _selector):
+        return FailingLocatorHandle()
+
+    async def evaluate(self, _script, _arg=None):
+        return "Visible ChatGPT text"
+
+    async def title(self):
+        return "ChatGPT"
+
+    async def screenshot(self, *, path, full_page=False):
+        with open(path, "wb") as handle:
+            handle.write(b"fake-png")
+
+
+@pytest.mark.asyncio
+async def test_selector_failure_writes_private_diagnostic_pack(tmp_path):
+    config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
+    config.selector_timeout_ms = 1
+    cache = ChatCache(config.database_path)
+    cache.initialize()
+    page = DiagnosticPage()
+    service = ChatGPTService(config, FakeProjectBrowser(page), cache)  # type: ignore[arg-type]
+    group = SelectorGroup("composer", ("[data-test='missing']",), "missing selector")
+
+    try:
+        with pytest.raises(SelectorResolutionError):
+            await service._locator(page, group)  # noqa: SLF001
+    finally:
+        cache.close()
+
+    packs = list(config.logs_dir.glob("selector-failure-*"))
+    assert len(packs) == 1
+    pack = packs[0]
+    assert oct(pack.stat().st_mode & 0o777) == "0o700"
+    assert (pack / "url.txt").read_text(encoding="utf-8") == "https://chatgpt.com/"
+    assert (pack / "title.txt").read_text(encoding="utf-8") == "ChatGPT"
+    assert "Visible ChatGPT text" in (pack / "visible-text-sample.txt").read_text(
+        encoding="utf-8"
+    )
+    assert (pack / "screenshot.png").read_bytes() == b"fake-png"
+    for path in pack.iterdir():
+        assert oct(path.stat().st_mode & 0o777) == "0o600"

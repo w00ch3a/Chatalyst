@@ -120,6 +120,29 @@ counts, browser mode/profile, and whether a default project has cached
 conversations. Pass `check_browser: true` only when you intentionally want a
 live browser/login check.
 
+## Project Scope Proof
+
+When `--mcp-default-project` is set, or when a `project_name` argument is passed,
+`chatalyst_send_new_message` opens that ChatGPT project before sending. The tool
+response includes a `scope` object with:
+
+- `requested_project`
+- `verified`
+- `reason`
+- `url`
+
+If Chatalyst can send the prompt but cannot prove that the visible ChatGPT page
+and the local cache both agree on the project, the response status is
+`scope_uncertain`. Treat that as a successful send with a project placement
+warning, not as proof that the chat landed in the requested project.
+
+## Selector Diagnostics
+
+If a ChatGPT UI selector cannot be resolved, Chatalyst writes a private
+diagnostic pack under `logs/selector-failure-*`. Each pack contains the current
+URL, page title, attempted selector group, a short visible text sample, and a
+screenshot. The directory is created with owner-only permissions.
+
 ## Notes
 
 - Chatalyst does not ask for, store, or replay ChatGPT credentials.

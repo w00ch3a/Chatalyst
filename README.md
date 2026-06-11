@@ -316,3 +316,14 @@ The browser session is the source of truth. The terminal UI is a presentation an
 productivity layer. The local database is a cache and knowledge vault.
 
 The legacy `chatgpt-tui` command is also installed as an alias.
+
+## License
+
+Chatalyst is licensed under the Apache License 2.0. You may use, modify, and
+redistribute the code, provided you retain the license and attribution notice.
+
+Attribution must reference:
+
+- w00ch3a
+- Chatalyst
+- https://github.com/w00ch3a/Chatalyst

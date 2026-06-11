@@ -225,6 +225,15 @@ class ChatCache:
 
     def upsert_conversation(self, conversation: Conversation) -> None:
         now = utc_now()
+        if conversation.project_id:
+            self.upsert_project(
+                Project(
+                    id=conversation.project_id,
+                    name=conversation.project_name or conversation.project_id,
+                    created_at=conversation.created_at,
+                    updated_at=conversation.updated_at or now,
+                )
+            )
         existing = self.get_conversation(conversation.id)
         created_at = conversation.created_at if existing is None else existing.created_at
         updated_at = conversation.updated_at or now
@@ -273,6 +282,15 @@ class ChatCache:
         if existing is None:
             self.upsert_conversation(conversation)
             return conversation
+        if conversation.project_id:
+            self.upsert_project(
+                Project(
+                    id=conversation.project_id,
+                    name=conversation.project_name or conversation.project_id,
+                    created_at=existing.created_at,
+                    updated_at=conversation.updated_at,
+                )
+            )
         conn = self.connection
         try:
             conn.execute("BEGIN IMMEDIATE")

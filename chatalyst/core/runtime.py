@@ -160,3 +160,11 @@ class RuntimeLock:
         except PermissionError:
             return True
         return True
+
+    @classmethod
+    def clean_stale(cls, path: Path) -> bool:
+        status = cls.status(path)
+        if status.exists and not status.locked and status.owner_alive is False:
+            path.unlink(missing_ok=True)
+            return True
+        return False

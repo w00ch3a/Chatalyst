@@ -58,6 +58,14 @@ def test_runtime_lock_status_reports_active_owner(tmp_path):
     assert status.locked is True
 
 
+def test_runtime_lock_clean_stale_removes_dead_owner_metadata(tmp_path):
+    lock_path = tmp_path / "runtime.lock"
+    lock_path.write_text("999999999\n", encoding="utf-8")
+
+    assert RuntimeLock.clean_stale(lock_path) is True
+    assert not lock_path.exists()
+
+
 def test_runtime_lock_does_not_unlink_empty_locked_file(tmp_path):
     lock_path = tmp_path / "runtime.lock"
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)

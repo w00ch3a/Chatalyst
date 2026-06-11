@@ -219,6 +219,9 @@ class ChatGPTService:
             id=self._hash_id(page.url or f"new-{utc_now().isoformat()}"),
             title="New Chat",
             url=page.url,
+            project_id=self._project_id_from_reference(normalized_project)
+            if normalized_project
+            else None,
             project_name=normalized_project,
             sync_status=SyncStatus.SYNCING,
         )
@@ -240,6 +243,7 @@ class ChatGPTService:
         conversation_project_name = self._conversation_project_name(
             conversation_id, project_name
         )
+        conversation_project_id = self._conversation_project_id(conversation_id, project_name)
         await self._wait_until_chatgpt_idle(page)
         baseline_messages = await self.extract_messages(page, conversation_id)
         if self.cache.get_conversation(conversation_id) is None:
@@ -249,6 +253,7 @@ class ChatGPTService:
                     title="New Chat",
                     url=starting_url,
                     chat_identifier=conversation_id,
+                    project_id=conversation_project_id,
                     project_name=conversation_project_name,
                     sync_status=SyncStatus.SYNCING,
                 )
@@ -344,6 +349,7 @@ class ChatGPTService:
                     title=await self._extract_title(page, "New Chat"),
                     url=page.url,
                     chat_identifier=actual_conversation_id,
+                    project_id=conversation_project_id,
                     project_name=conversation_project_name,
                     sync_status=SyncStatus.CACHED,
                 )
@@ -389,6 +395,7 @@ class ChatGPTService:
                     title=await self._extract_title(page, "New Chat"),
                     url=page.url,
                     chat_identifier=actual_conversation_id,
+                    project_id=conversation_project_id,
                     project_name=conversation_project_name,
                     sync_status=SyncStatus.CACHED,
                 )
@@ -445,6 +452,11 @@ class ChatGPTService:
         normalized = project_name.strip()
         if not normalized:
             raise ProjectSelectionError("Project name must not be blank.")
+        project_url = self._project_url_from_reference(normalized)
+        if project_url:
+            await page.goto(project_url, wait_until="domcontentloaded")
+            await self._wait_for_any(page, self.selectors.composer)
+            return
         await self._wait_for_any(page, self.selectors.project_labels)
         escaped = re.escape(normalized)
         project_link = page.locator(
@@ -498,16 +510,30 @@ class ChatGPTService:
             """,
             normalized,
         )
+        requested_project_id = self._project_id_from_reference(normalized)
+        url_match = requested_project_id is not None and requested_project_id in (page.url or "")
         conversation_id = self._conversation_id_from_url(page.url)
         cached = self.cache.get_conversation(conversation_id)
         cached_match = (
-            (cached.project_name or "").casefold() == normalized.casefold() if cached else False
+            (
+                (cached.project_name or "").casefold() == normalized.casefold()
+                or (requested_project_id is not None and cached.project_id == requested_project_id)
+            )
+            if cached
+            else False
         )
-        if bool(visible) and cached_match:
+        if (bool(visible) or url_match) and cached_match:
             return ProjectScopeState(
                 requested_project=normalized,
                 verified=True,
-                reason="visible_project_and_cache_match",
+                reason="visible_or_url_project_and_cache_match",
+                url=page.url,
+            )
+        if url_match:
+            return ProjectScopeState(
+                requested_project=normalized,
+                verified=False,
+                reason="project_url_match_but_cache_not_reconciled",
                 url=page.url,
             )
         if bool(visible):
@@ -540,6 +566,15 @@ class ChatGPTService:
         cached = self.cache.get_conversation(conversation_id)
         cached_project = cached.project_name.strip() if cached and cached.project_name else None
         return cached_project or None
+
+    def _conversation_project_id(
+        self, conversation_id: str, project_name: str | None
+    ) -> str | None:
+        normalized = project_name.strip() if project_name else None
+        if normalized:
+            return self._project_id_from_reference(normalized)
+        cached = self.cache.get_conversation(conversation_id)
+        return cached.project_id if cached else None
 
     async def extract_messages(self, page: Page, conversation_id: str) -> list[Message]:
         raw_messages = await page.evaluate(
@@ -763,6 +798,22 @@ class ChatGPTService:
         if match:
             return match.group(1)
         return self._hash_id(url or "local-project")
+
+    def _project_id_from_reference(self, reference: str) -> str | None:
+        match = re.search(r"/g/([^/?#]+)", reference)
+        if match:
+            return match.group(1)
+        if re.fullmatch(r"[A-Za-z0-9_-]{8,}", reference):
+            return reference
+        return None
+
+    def _project_url_from_reference(self, reference: str) -> str | None:
+        project_id = self._project_id_from_reference(reference)
+        if project_id is None:
+            return None
+        if reference.startswith(("https://chatgpt.com/g/", "https://chat.openai.com/g/")):
+            return reference
+        return f"{self.config.chatgpt_url.rstrip('/')}/g/{project_id}"
 
     def _message_id(self, conversation_id: str, role: MessageRole, text: str, ordinal: int) -> str:
         return self._hash_id(f"{conversation_id}:{role.value}:{ordinal}:{text[:256]}")

@@ -10,4 +10,7 @@
 - Provider browser mode, ultralight browser profile, project-scoped MCP sends,
   project scope diagnostics, selector diagnostic packs, and runtime lock status.
 - Local plugin manifest loader for trusted workspace plugins.
-- CLI doctor, smoke, and version checks for local and remote installs.
+- CLI doctor, project-doctor, smoke, stale-lock repair, and version checks for
+  local and remote installs.
+- Project-scoped MCP sends can target visible project names, ChatGPT `/g/...`
+  project URLs, or project ids.

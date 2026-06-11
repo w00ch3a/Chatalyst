@@ -41,12 +41,16 @@ Before connecting an MCP client, run a local check:
 ```bash
 uv run chatalyst --doctor --mcp --browser-mode provider
 uv run chatalyst --smoke --mcp-read-only --browser-mode provider
+uv run chatalyst --project-doctor --mcp-default-project "Research"
 ```
 
 `doctor` does not open ChatGPT. It checks the workspace, private runtime paths,
 cache counts, installed commands, and the MCP tool schema.
 `smoke` does not open ChatGPT either. It exercises MCP initialize, tools/list,
 and `chatalyst_health`.
+`project-doctor` does open ChatGPT. It reports login/browser state, visible
+projects, the current URL, and whether a configured project name, project URL,
+or project id can be opened.
 
 ## Client Configuration
 
@@ -126,8 +130,9 @@ you intentionally want a live browser/login check.
 ## Project Scope Proof
 
 When `--mcp-default-project` is set, or when a `project_name` argument is passed,
-`chatalyst_send_new_message` opens that ChatGPT project before sending. The tool
-response includes a `scope` object with:
+`chatalyst_send_new_message` opens that ChatGPT project before sending. The value
+can be a visible project name, a ChatGPT `/g/...` project URL, or a project id.
+The tool response includes a `scope` object with:
 
 - `requested_project`
 - `verified`

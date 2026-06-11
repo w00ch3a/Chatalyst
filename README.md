@@ -54,12 +54,15 @@ Local health check:
 uv run chatalyst --doctor
 uv run chatalyst --doctor --mcp
 uv run chatalyst --smoke --mcp-read-only
+uv run chatalyst --project-doctor --mcp-default-project "Research"
 ```
 
 `--doctor` prints JSON describing the workspace, private runtime paths, cache
 counts, installed command paths, and MCP tool schema when `--mcp` is included.
 `--smoke` exercises MCP initialize, tools/list, and health without opening
 ChatGPT.
+`--project-doctor` opens ChatGPT and reports visible projects plus whether a
+configured project name, `/g/...` URL, or project id can be opened.
 
 Browser lifecycle modes:
 
@@ -187,10 +190,11 @@ MCP tool choice:
   shape for the task.
 
 When `--mcp-default-project` is set, `chatalyst_send_new_message` first opens
-that visible ChatGPT project before creating the new chat. A tool call can also
-provide `project_name` to override the configured project for that one request.
-If the project is not visible in ChatGPT's sidebar/project UI, Chatalyst returns
-an MCP error instead of silently creating an unscoped chat.
+that ChatGPT project before creating the new chat. The value can be a visible
+project name, a ChatGPT `/g/...` project URL, or a project id. A tool call can
+also provide `project_name` to override the configured project for that one
+request. If the project cannot be opened, Chatalyst returns an MCP error instead
+of silently creating an unscoped chat.
 
 Use `--mcp-read-only` for LAN-adjacent or bridged automation that should not
 write exports/snippets or send ChatGPT messages. MCP requests are size-capped by
@@ -291,7 +295,8 @@ execution.
 `chatalyst_health` includes runtime lock status and cached projects. If an MCP
 client appears stuck, run `uv run chatalyst --doctor --mcp` or
 `uv run chatalyst --smoke --mcp-read-only` on that host and check
-`runtime_lock.owner_pid`.
+`runtime_lock.owner_pid`. Add `--repair-stale-lock` to remove unlocked lock
+metadata whose owner process is already dead.
 
 ## Security Notes
 

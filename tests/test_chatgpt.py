@@ -15,6 +15,12 @@ class FakeProjectPage:
     project_visible = False
     projects_payload = []
 
+    async def goto(self, url, wait_until=None):
+        self.url = url
+
+    async def wait_for_load_state(self, *_args, **_kwargs):
+        return None
+
     async def evaluate(self, _script, _arg=None):
         if "href*=\"/g/\"" in _script:
             return self.projects_payload
@@ -63,6 +69,36 @@ async def test_project_scoped_new_chat_does_not_click_global_new_chat(tmp_path):
     assert opened_projects == ["Research"]
     assert clicked_new_chat is False
     assert conversation.project_name == "Research"
+
+
+@pytest.mark.asyncio
+async def test_project_scoped_new_chat_accepts_project_url_reference(tmp_path):
+    config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
+    cache = ChatCache(config.database_path)
+    cache.initialize()
+    page = FakeProjectPage()
+    service = ChatGPTService(config, FakeProjectBrowser(page), cache)  # type: ignore[arg-type]
+    clicked_new_chat = False
+
+    async def click_new_chat(_page, _selector_group):
+        nonlocal clicked_new_chat
+        clicked_new_chat = True
+        return True
+
+    async def wait_for_composer(_page, _selector_group):
+        return None
+
+    service._click_first = click_new_chat  # type: ignore[method-assign]
+    service._wait_for_any = wait_for_composer  # type: ignore[method-assign]
+    try:
+        conversation = await service.new_chat(project_name="https://chatgpt.com/g/project-alpha")
+    finally:
+        cache.close()
+
+    assert clicked_new_chat is False
+    assert page.url == "https://chatgpt.com/g/project-alpha"
+    assert conversation.project_id == "project-alpha"
+    assert conversation.project_name == "https://chatgpt.com/g/project-alpha"
 
 
 @pytest.mark.asyncio
@@ -224,8 +260,36 @@ async def test_project_scope_verifies_only_when_browser_and_cache_match(tmp_path
         cache.close()
 
     assert scope.verified is True
-    assert scope.reason == "visible_project_and_cache_match"
+    assert scope.reason == "visible_or_url_project_and_cache_match"
     assert scope.url == "https://chatgpt.com/c/chat-1"
+
+
+@pytest.mark.asyncio
+async def test_project_scope_verifies_url_reference_by_cached_project_id(tmp_path):
+    config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
+    cache = ChatCache(config.database_path)
+    cache.initialize()
+    page = FakeProjectPage()
+    page.url = "https://chatgpt.com/g/project-alpha"
+    page.project_visible = False
+    cache.upsert_conversation(
+        Conversation(
+            id=(service_id := "local-project-url-chat"),
+            title="Project Chat",
+            project_id="project-alpha",
+            project_name="Alpha",
+            sync_status=SyncStatus.CACHED,
+        )
+    )
+    service = ChatGPTService(config, FakeProjectBrowser(page), cache)  # type: ignore[arg-type]
+    service._conversation_id_from_url = lambda _url: service_id  # type: ignore[method-assign]
+    try:
+        scope = await service.verify_project_scope("https://chatgpt.com/g/project-alpha")
+    finally:
+        cache.close()
+
+    assert scope.verified is True
+    assert scope.reason == "visible_or_url_project_and_cache_match"
 
 
 @pytest.mark.asyncio

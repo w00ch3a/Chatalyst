@@ -687,6 +687,49 @@ def run_mcp_smoke(config: AppConfig, *, read_only: bool, max_text_chars: int) ->
     return 1 if failures else 0
 
 
+async def run_project_doctor(config: AppConfig, *, project_reference: str | None) -> int:
+    """Inspect visible ChatGPT projects and optional project scope opening."""
+
+    config.ensure_runtime_dirs()
+    cache = ChatCache(config.database_path)
+    cache.initialize()
+    browser = BrowserController(config)
+    chatgpt = ChatGPTService(config, browser, cache)
+    payload: dict[str, object] = {
+        "ok": False,
+        "requested_project": project_reference,
+        "browser": None,
+        "url": None,
+        "projects": [],
+        "open_project": None,
+    }
+    try:
+        status = await chatgpt.status()
+        payload["browser"] = status.model_dump(mode="json")
+        page = await browser.start()
+        payload["url"] = page.url
+        projects = await chatgpt.extract_projects(page)
+        for project in projects:
+            cache.upsert_project(project)
+        payload["projects"] = [project.model_dump(mode="json") for project in projects]
+        if project_reference:
+            try:
+                await chatgpt._open_project(page, project_reference)  # noqa: SLF001
+                scope = await chatgpt.verify_project_scope(project_reference)
+                payload["open_project"] = scope.__dict__
+                payload["ok"] = True
+            except Exception as exc:
+                payload["open_project"] = {"ok": False, "error": str(exc)}
+        else:
+            payload["ok"] = True
+    finally:
+        await browser.park_after_work()
+        await browser.stop()
+        cache.close()
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["ok"] else 1
+
+
 def _private_mode(path: Path) -> str | None:
     if not path.exists():
         return None
@@ -731,6 +774,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--smoke",
         action="store_true",
         help="Run a local MCP smoke test without opening ChatGPT.",
+    )
+    parser.add_argument(
+        "--project-doctor",
+        action="store_true",
+        help="Open ChatGPT and report visible projects plus optional project scope.",
+    )
+    parser.add_argument(
+        "--repair-stale-lock",
+        action="store_true",
+        help="Remove stale unlocked runtime lock metadata before doctor/smoke/project-doctor.",
     )
     parser.add_argument(
         "--mcp-read-only",
@@ -821,8 +874,13 @@ def main() -> None:
         parser.error("--login cannot be combined with --doctor")
     if args.login and args.smoke:
         parser.error("--login cannot be combined with --smoke")
+    if args.login and args.project_doctor:
+        parser.error("--login cannot be combined with --project-doctor")
     browser_mode = "headless" if args.headless else args.browser_mode
     workspace = args.workspace.expanduser().resolve()
+    if args.repair_stale_lock:
+        probe_config = AppConfig.from_workspace(workspace)
+        RuntimeLock.clean_stale(probe_config.runtime_lock_path)
     if args.doctor:
         mcp_browser_mode = browser_mode
         if (
@@ -878,6 +936,29 @@ def main() -> None:
                 max_text_chars=args.mcp_max_text_chars,
             )
         )
+    if args.project_doctor:
+        config = AppConfig.from_workspace(
+            workspace,
+            offline=False,
+            debug=args.debug,
+            headless=args.headless,
+            browser_mode=browser_mode,
+            browser_profile=args.browser_profile,
+        ).model_copy(
+            update={
+                "assistant_response_timeout_seconds": args.assistant_response_timeout_seconds,
+                "mcp_live_response_timeout_seconds": args.mcp_live_response_timeout_seconds,
+                "mcp_live_result_message_limit": args.mcp_live_result_message_limit,
+                "mcp_default_project": args.mcp_default_project,
+            }
+        )
+        try:
+            raise SystemExit(
+                asyncio.run(run_project_doctor(config, project_reference=args.mcp_default_project))
+            )
+        except RuntimeLockError as exc:
+            print(exc)
+            raise SystemExit(2) from exc
     if args.login:
         config = AppConfig.from_workspace(
             workspace,

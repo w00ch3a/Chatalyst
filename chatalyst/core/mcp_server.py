@@ -21,6 +21,8 @@ from chatalyst.core.chatgpt import (
 from chatalyst.core.config import AppConfig
 from chatalyst.core.export import ExportFormat, ExportService
 from chatalyst.core.models import Conversation, LoginState, Message
+from chatalyst.core.privacy import redact_project_refs
+from chatalyst.core.project_aliases import ProjectAliasResolver
 from chatalyst.core.runtime import RuntimeLock, RuntimeLockError
 from chatalyst.core.search import SearchEngine
 from chatalyst.core.snippets import SnippetService
@@ -59,6 +61,7 @@ class ChatalystMCPServer:
         self.search = SearchEngine(self.cache)
         self.export = ExportService(self.cache, self.config.exports_dir)
         self.snippets = SnippetService(cache=self.cache, snippets_dir=self.config.snippets_dir)
+        self.project_aliases = ProjectAliasResolver(self.config)
         self.browser: BrowserController | None = None
         self.chatgpt: ChatGPTService | None = None
         self._tool_handlers: dict[str, ToolHandler] = {
@@ -155,9 +158,10 @@ class ChatalystMCPServer:
     async def _tool_health(self, arguments: JsonObject) -> JsonObject:
         check_browser = self._optional_bool(arguments, "check_browser", default=False)
         resolved_conversation = self._resolve_scoped_conversation(required=False)
+        default_project = self.project_aliases.resolve(self.config.mcp_default_project)
         resolved_project = (
-            self._find_recent_project_conversation(self.config.mcp_default_project)
-            if self.config.mcp_default_project
+            self._find_recent_project_conversation(default_project.resolved)
+            if default_project
             else None
         )
         payload: JsonObject = {
@@ -169,14 +173,16 @@ class ChatalystMCPServer:
             "browser_mode": self.config.browser_mode.value,
             "browser_profile": self.config.browser_profile.value,
             "default_conversation": self.config.mcp_default_conversation,
-            "default_project": self.config.mcp_default_project,
+            "default_project": self._display_project_reference(self.config.mcp_default_project),
             "resolved_conversation": (
                 resolved_conversation.model_dump(mode="json")
                 if resolved_conversation is not None
                 else None
             ),
             "default_project_has_cached_conversation": resolved_project is not None,
-            "projects": [project.model_dump(mode="json") for project in self.cache.list_projects()],
+            "projects": redact_project_refs(
+                [project.model_dump(mode="json") for project in self.cache.list_projects()]
+            ),
             "cache_counts": self._cache_counts(),
             "runtime_lock": self._runtime_lock_status(),
             "browser": {
@@ -202,7 +208,7 @@ class ChatalystMCPServer:
         conversation = self._resolve_scoped_conversation(required=False)
         return {
             "default_conversation": self.config.mcp_default_conversation,
-            "default_project": self.config.mcp_default_project,
+            "default_project": self._display_project_reference(self.config.mcp_default_project),
             "resolved_conversation": (
                 conversation.model_dump(mode="json") if conversation is not None else None
             ),
@@ -303,7 +309,7 @@ class ChatalystMCPServer:
         if not prompt.strip():
             raise MCPError(-32602, "prompt must not be empty.")
         wait_seconds = self._optional_wait_seconds(arguments)
-        project_name = self._optional_project_name(arguments)
+        project_reference = self._optional_project_reference(arguments)
         try:
             async with RuntimeLock(
                 self.config.runtime_lock_path,
@@ -311,19 +317,22 @@ class ChatalystMCPServer:
             ):
                 chatgpt = await self._live_chatgpt()
                 try:
-                    await chatgpt.new_chat(project_name=project_name)
+                    await chatgpt.new_chat(
+                        project_name=project_reference.resolved if project_reference else None
+                    )
                     result = await self._send_prompt_and_payload(
                         prompt,
                         wait_seconds=wait_seconds,
-                        project_name=project_name,
+                        project_name=project_reference.resolved if project_reference else None,
                     )
-                    if project_name is not None:
-                        scope = await chatgpt.verify_project_scope(project_name)
+                    if project_reference is not None:
+                        scope = await chatgpt.verify_project_scope(project_reference.resolved)
                         result["scope"] = {
-                            "requested_project": scope.requested_project,
+                            "requested_project": project_reference.display,
+                            "alias_used": project_reference.alias_used,
                             "verified": scope.verified,
                             "reason": scope.reason,
-                            "url": scope.url,
+                            "url": redact_project_refs(scope.url),
                         }
                         if not scope.verified and result.get("status") is None:
                             result["status"] = "scope_uncertain"
@@ -647,6 +656,16 @@ class ChatalystMCPServer:
             raise MCPError(-32602, "project_name exceeds 200 characters.")
         return stripped
 
+    def _optional_project_reference(self, arguments: JsonObject):
+        value = self._optional_project_name(arguments)
+        return self.project_aliases.resolve(value)
+
+    def _display_project_reference(self, reference: str | None) -> str | None:
+        resolved = self.project_aliases.resolve(reference)
+        if resolved is None:
+            return None
+        return resolved.display
+
     def _resolve_scoped_conversation(
         self,
         requested: object | None = None,
@@ -665,15 +684,16 @@ class ChatalystMCPServer:
                 required=True,
             )
         if self.config.mcp_default_project:
-            if not self.config.mcp_default_project.strip():
+            project_reference = self.project_aliases.resolve(self.config.mcp_default_project)
+            if project_reference is None or not project_reference.resolved.strip():
                 raise MCPError(-32602, "--mcp-default-project must not be blank.")
-            conversation = self._find_recent_project_conversation(self.config.mcp_default_project)
+            conversation = self._find_recent_project_conversation(project_reference.resolved)
             if conversation is not None:
                 return conversation
             if required:
                 raise MCPError(
                     -32602,
-                    f"No cached conversations found for project: {self.config.mcp_default_project}",
+                    f"No cached conversations found for project: {project_reference.display}",
                 )
         if required:
             raise MCPError(

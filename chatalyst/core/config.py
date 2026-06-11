@@ -27,6 +27,7 @@ class AppConfig(BaseModel):
     profile_dir: Path
     logs_dir: Path
     exports_dir: Path
+    config_dir: Path
     plugins_dir: Path
     runtime_dir: Path
     snippets_dir: Path
@@ -95,6 +96,7 @@ class AppConfig(BaseModel):
             profile_dir=root / "profile" / "chromium",
             logs_dir=root / "logs",
             exports_dir=root / "exports",
+            config_dir=root / "config",
             plugins_dir=root / "plugins",
             runtime_dir=root / "runtime",
             snippets_dir=root / "work" / "snippets",
@@ -115,6 +117,7 @@ class AppConfig(BaseModel):
             self.profile_dir,
             self.logs_dir,
             self.exports_dir,
+            self.config_dir,
             self.plugins_dir,
             self.runtime_dir,
             self.snippets_dir,
@@ -125,3 +128,7 @@ class AppConfig(BaseModel):
     @property
     def runtime_lock_path(self) -> Path:
         return self.runtime_dir / "default.lock"
+
+    @property
+    def project_aliases_path(self) -> Path:
+        return self.config_dir / "project_aliases.json"

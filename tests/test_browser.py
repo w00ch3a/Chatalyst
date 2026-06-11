@@ -78,6 +78,9 @@ def test_ultralight_browser_profile_tightens_launch_and_pruning():
     assert not policy.should_abort_request("https://auth.openai.com/login", "document")
     assert "--disable-gpu" in policy.chromium_args()
     assert "--process-per-site" in policy.chromium_args()
+    assert "--hide-scrollbars" in policy.chromium_args()
+    assert "--no-pings" in policy.chromium_args()
+    assert any("Prerender2" in arg for arg in policy.chromium_args())
 
 
 def test_standard_browser_profile_keeps_stylesheets_available():

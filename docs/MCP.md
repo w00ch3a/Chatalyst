@@ -42,6 +42,7 @@ Before connecting an MCP client, run a local check:
 uv run chatalyst --doctor --mcp --browser-mode provider
 uv run chatalyst --smoke --mcp-read-only --browser-mode provider
 uv run chatalyst --project-doctor --mcp-default-project "Research"
+uv run chatalyst --set-project-alias research "https://chatgpt.com/g/..."
 ```
 
 `doctor` does not open ChatGPT. It checks the workspace, private runtime paths,
@@ -51,6 +52,9 @@ and `chatalyst_health`.
 `project-doctor` does open ChatGPT. It reports login/browser state, visible
 projects, the current URL, and whether a configured project name, project URL,
 or project id can be opened.
+`set-project-alias` stores a private alias in `config/project_aliases.json`.
+That directory is ignored by Git, so MCP clients can pass the alias instead of a
+private project URL/id.
 
 ## Client Configuration
 
@@ -110,6 +114,23 @@ The same split-row rule applies when launching `chatalyst-mcp` directly:
     "Research",
     "--mcp-live-response-timeout-seconds",
     "180"
+  ],
+  "env": {}
+}
+```
+
+Private project aliases:
+
+```json
+{
+  "command": "/home/user/.local/bin/chatalyst-mcp",
+  "args": [
+    "--workspace",
+    "/home/user/.local/share/chatalyst",
+    "--browser-mode",
+    "provider",
+    "--mcp-default-project",
+    "research"
   ],
   "env": {}
 }

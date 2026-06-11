@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from types import SimpleNamespace
 
@@ -75,6 +76,27 @@ def test_mcp_project_name_argument_overrides_config(tmp_path):
         assert server._optional_project_name({"project_name": "Ops"}) == "Ops"
     finally:
         server.cache.close()
+
+
+def test_mcp_project_alias_resolves_privately_and_displays_alias(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "project_aliases.json").write_text(
+        json.dumps({"work": "https://chatgpt.com/g/private-project"}),
+        encoding="utf-8",
+    )
+    server = _server(tmp_path)
+    server.config = server.config.model_copy(update={"mcp_default_project": "work"})
+    try:
+        project_reference = server._optional_project_reference({})
+        scope = server._tool_get_scope({})
+    finally:
+        server.cache.close()
+
+    assert project_reference is not None
+    assert project_reference.display == "work"
+    assert project_reference.resolved == "https://chatgpt.com/g/private-project"
+    assert scope["default_project"] == "work"
 
 
 def test_mcp_project_name_rejects_blank_value(tmp_path):
@@ -613,6 +635,7 @@ async def test_mcp_send_new_message_reports_uncertain_project_scope(tmp_path):
     assert payload["status"] == "scope_uncertain"
     assert payload["scope"] == {
         "requested_project": "Research",
+        "alias_used": None,
         "verified": False,
         "reason": "cache_match_only",
         "url": "https://chatgpt.com/c/chat-1",

@@ -130,12 +130,14 @@ class BrowserOptimizationPolicy:
                 "--disable-client-side-phishing-detection",
                 "--disable-component-update",
                 "--disable-default-apps",
+                "--disable-features=AudioServiceOutOfProcess,AutofillServerCommunication,"
+                "CalculateNativeWinOcclusion,InterestFeedContentSuggestions,MediaRouter,"
+                "OptimizationHints,PaintHolding,Prerender2,SpeculationRulesPrefetchProxy,"
+                "Translate",
+                "--disable-ipc-flooding-protection",
                 "--disable-dev-shm-usage",
                 "--disable-domain-reliability",
                 "--disable-extensions",
-                "--disable-features=AutofillServerCommunication,CalculateNativeWinOcclusion,"
-                "InterestFeedContentSuggestions,MediaRouter,OptimizationHints,Translate,"
-                "PaintHolding,Prerender2,SpeculationRulesPrefetchProxy",
                 "--disable-gpu",
                 "--disable-hang-monitor",
                 "--disable-notifications",
@@ -146,10 +148,12 @@ class BrowserOptimizationPolicy:
                 "--disable-smooth-scrolling",
                 "--disable-sync",
                 "--disable-translate",
+                "--hide-scrollbars",
                 "--metrics-recording-only",
                 "--mute-audio",
                 "--no-default-browser-check",
                 "--no-first-run",
+                "--no-pings",
                 "--process-per-site",
             ),
         )

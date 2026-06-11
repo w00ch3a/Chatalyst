@@ -55,6 +55,7 @@ uv run chatalyst --doctor
 uv run chatalyst --doctor --mcp
 uv run chatalyst --smoke --mcp-read-only
 uv run chatalyst --project-doctor --mcp-default-project "Research"
+uv run chatalyst --set-project-alias work "https://chatgpt.com/g/..."
 ```
 
 `--doctor` prints JSON describing the workspace, private runtime paths, cache
@@ -63,6 +64,10 @@ counts, installed command paths, and MCP tool schema when `--mcp` is included.
 ChatGPT.
 `--project-doctor` opens ChatGPT and reports visible projects plus whether a
 configured project name, `/g/...` URL, or project id can be opened.
+`--set-project-alias` writes a private local alias to
+`config/project_aliases.json`, which is ignored by Git. Use aliases such as
+`work` or `research` in MCP/TUI config instead of putting private project URLs in
+the repository.
 
 Browser lifecycle modes:
 
@@ -82,6 +87,11 @@ uses headed Chromium only as a hidden provider for live ChatGPT work, then close
 it. `background` is kept as an alias for `provider`.
 `sleep` closes Chromium between live ChatGPT operations and wakes it only when
 needed.
+`ultralight` additionally blocks images, media, fonts, stylesheets, telemetry
+endpoints, non-ChatGPT document navigations, audio, pings, smooth scrolling, and
+unused Chromium services. Chatalyst intentionally does not use
+`--single-process`; it is unstable for persistent authenticated Chromium
+sessions.
 
 For SSH use, log in once on the host with a visible browser, then run:
 
@@ -195,6 +205,19 @@ project name, a ChatGPT `/g/...` project URL, or a project id. A tool call can
 also provide `project_name` to override the configured project for that one
 request. If the project cannot be opened, Chatalyst returns an MCP error instead
 of silently creating an unscoped chat.
+
+For private projects, prefer local aliases:
+
+```bash
+uv run chatalyst --workspace /path/to/workspace \
+  --set-project-alias research "https://chatgpt.com/g/..."
+```
+
+Then configure MCP with:
+
+```json
+"--mcp-default-project", "research"
+```
 
 Use `--mcp-read-only` for LAN-adjacent or bridged automation that should not
 write exports/snippets or send ChatGPT messages. MCP requests are size-capped by

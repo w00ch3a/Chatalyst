@@ -30,6 +30,8 @@ from chatalyst.core.models import (
     Snippet,
 )
 from chatalyst.core.plugins import PluginContext, PluginRegistry
+from chatalyst.core.privacy import redact_project_refs
+from chatalyst.core.project_aliases import ProjectAliasResolver
 from chatalyst.core.runtime import RuntimeLock, RuntimeLockError
 from chatalyst.core.search import SearchEngine
 from chatalyst.core.snippets import SnippetService
@@ -687,6 +689,31 @@ def run_mcp_smoke(config: AppConfig, *, read_only: bool, max_text_chars: int) ->
     return 1 if failures else 0
 
 
+def run_set_project_alias(config: AppConfig, *, alias: str, target: str) -> int:
+    config.ensure_runtime_dirs()
+    path = config.project_aliases_path
+    aliases: dict[str, str] = {}
+    if path.exists():
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            aliases = {str(key): str(value) for key, value in raw.items()}
+    aliases[alias.strip()] = target.strip()
+    path.write_text(json.dumps(aliases, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "path": str(path),
+                "alias": alias.strip(),
+                "target": "[redacted-project-reference]",
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
 async def run_project_doctor(config: AppConfig, *, project_reference: str | None) -> int:
     """Inspect visible ChatGPT projects and optional project scope opening."""
 
@@ -695,9 +722,12 @@ async def run_project_doctor(config: AppConfig, *, project_reference: str | None
     cache.initialize()
     browser = BrowserController(config)
     chatgpt = ChatGPTService(config, browser, cache)
+    project_aliases = ProjectAliasResolver(config)
+    resolved_project = project_aliases.resolve(project_reference)
     payload: dict[str, object] = {
         "ok": False,
-        "requested_project": project_reference,
+        "requested_project": resolved_project.display if resolved_project else None,
+        "project_alias_used": resolved_project.alias_used if resolved_project else None,
         "browser": None,
         "url": None,
         "projects": [],
@@ -712,14 +742,24 @@ async def run_project_doctor(config: AppConfig, *, project_reference: str | None
         projects = await chatgpt.extract_projects(page)
         for project in projects:
             cache.upsert_project(project)
-        payload["projects"] = [project.model_dump(mode="json") for project in projects]
+        payload["projects"] = redact_project_refs(
+            [project.model_dump(mode="json") for project in projects]
+        )
         if not projects:
             payload["project_diagnostics"] = await chatgpt.project_diagnostics(page)
-        if project_reference:
+        if resolved_project:
             try:
-                await chatgpt._open_project(page, project_reference)  # noqa: SLF001
-                scope = await chatgpt.verify_project_scope(project_reference)
-                payload["open_project"] = scope.__dict__
+                await chatgpt._open_project(page, resolved_project.resolved)  # noqa: SLF001
+                scope = await chatgpt.verify_project_scope(resolved_project.resolved)
+                payload["open_project"] = redact_project_refs(
+                    {
+                        "requested_project": resolved_project.display,
+                        "alias_used": resolved_project.alias_used,
+                        "verified": scope.verified,
+                        "reason": scope.reason,
+                        "url": scope.url,
+                    }
+                )
                 payload["ok"] = True
             except Exception as exc:
                 payload["open_project"] = {"ok": False, "error": str(exc)}
@@ -782,6 +822,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--project-doctor",
         action="store_true",
         help="Open ChatGPT and report visible projects plus optional project scope.",
+    )
+    parser.add_argument(
+        "--set-project-alias",
+        nargs=2,
+        metavar=("ALIAS", "PROJECT_REF"),
+        help="Store a private local project alias in config/project_aliases.json.",
     )
     parser.add_argument(
         "--repair-stale-lock",
@@ -879,11 +925,22 @@ def main() -> None:
         parser.error("--login cannot be combined with --smoke")
     if args.login and args.project_doctor:
         parser.error("--login cannot be combined with --project-doctor")
+    if args.login and args.set_project_alias:
+        parser.error("--login cannot be combined with --set-project-alias")
     browser_mode = "headless" if args.headless else args.browser_mode
     workspace = args.workspace.expanduser().resolve()
     if args.repair_stale_lock:
         probe_config = AppConfig.from_workspace(workspace)
         RuntimeLock.clean_stale(probe_config.runtime_lock_path)
+    if args.set_project_alias:
+        config = AppConfig.from_workspace(workspace)
+        raise SystemExit(
+            run_set_project_alias(
+                config,
+                alias=args.set_project_alias[0],
+                target=args.set_project_alias[1],
+            )
+        )
     if args.doctor:
         mcp_browser_mode = browser_mode
         if (

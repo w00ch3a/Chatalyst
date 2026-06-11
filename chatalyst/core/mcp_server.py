@@ -6,7 +6,6 @@ import inspect
 import json
 import sys
 from collections.abc import Awaitable, Callable
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +24,7 @@ from chatalyst.core.models import Conversation, LoginState, Message
 from chatalyst.core.runtime import RuntimeLock, RuntimeLockError
 from chatalyst.core.search import SearchEngine
 from chatalyst.core.snippets import SnippetService
+from chatalyst.core.version import package_version
 
 JsonObject = dict[str, Any]
 ToolHandler = Callable[[JsonObject], JsonObject | Awaitable[JsonObject]]
@@ -117,7 +117,7 @@ class ChatalystMCPServer:
             return {
                 "protocolVersion": protocol_version,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "chatalyst", "version": "0.1.0"},
+                "serverInfo": {"name": "chatalyst", "version": self._package_version()},
             }
         if method == "ping":
             return {}
@@ -731,10 +731,7 @@ class ChatalystMCPServer:
         return counts
 
     def _package_version(self) -> str:
-        try:
-            return version("chatalyst")
-        except PackageNotFoundError:
-            return "0.1.0"
+        return package_version()
 
     def _require_write_enabled(self) -> None:
         if self.read_only:
@@ -879,6 +876,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         prog="chatalyst-mcp",
         description="Run the Chatalyst local-vault MCP server over stdio.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {package_version()}",
+        help="Show the installed Chatalyst MCP version and exit.",
     )
     parser.add_argument(
         "--workspace",

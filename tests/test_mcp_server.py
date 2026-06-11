@@ -289,6 +289,21 @@ async def test_mcp_handle_ignores_notification_without_response(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_mcp_initialize_reports_package_version(tmp_path):
+    server = _server(tmp_path)
+    try:
+        response = await server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+    finally:
+        server.cache.close()
+
+    assert response is not None
+    assert response["result"]["serverInfo"] == {
+        "name": "chatalyst",
+        "version": server._package_version(),  # noqa: SLF001
+    }
+
+
+@pytest.mark.asyncio
 async def test_mcp_send_payload_reports_submitted_without_response(tmp_path):
     server = _server(tmp_path)
     conversation = Conversation(

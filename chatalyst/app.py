@@ -34,6 +34,7 @@ from chatalyst.core.runtime import RuntimeLock, RuntimeLockError
 from chatalyst.core.search import SearchEngine
 from chatalyst.core.snippets import SnippetService
 from chatalyst.core.terminal import TerminalRunner, TerminalTimeoutError
+from chatalyst.core.version import package_version
 from chatalyst.widgets.bookmark_panel import BookmarkPanel
 from chatalyst.widgets.chat_list import ChatList
 from chatalyst.widgets.command_palette import CommandPalette
@@ -657,6 +658,12 @@ def _private_mode(path: Path) -> str | None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="chatalyst")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {package_version()}",
+        help="Show the installed Chatalyst version and exit.",
+    )
     parser.add_argument(
         "--workspace",
         type=Path,

@@ -1,9 +1,30 @@
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, Field
+
+_ACCOUNT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+def validate_account_name(account: str | None) -> str | None:
+    """Return a safe account slug or reject path-like/private names."""
+
+    if account is None:
+        return None
+    stripped = account.strip()
+    if not stripped:
+        raise ValueError("account must not be blank")
+    if not _ACCOUNT_NAME_RE.fullmatch(stripped):
+        raise ValueError(
+            "account must start with a letter or number and contain only "
+            "letters, numbers, dots, underscores, or hyphens"
+        )
+    if stripped in {".", ".."} or stripped.startswith("."):
+        raise ValueError("account must not be hidden or path-like")
+    return stripped
 
 
 class BrowserMode(StrEnum):
@@ -23,6 +44,8 @@ class BrowserProfile(StrEnum):
 class AppConfig(BaseModel):
     app_name: str = "chatgpt-tui"
     workspace: Path
+    account: str | None = None
+    account_dir: Path | None = None
     database_path: Path
     profile_dir: Path
     logs_dir: Path
@@ -47,6 +70,8 @@ class AppConfig(BaseModel):
     assistant_response_timeout_seconds: float = 300.0
     mcp_live_response_timeout_seconds: float = 180.0
     mcp_live_result_message_limit: int = 20
+    mcp_token_frugal: bool = False
+    mcp_prompt_warning_tokens: int = 4_000
     mcp_default_conversation: str | None = None
     mcp_default_project: str | None = None
     browser_viewport_width: int = 1440
@@ -81,8 +106,11 @@ class AppConfig(BaseModel):
         headless: bool = False,
         browser_mode: BrowserMode | str = BrowserMode.AUTO,
         browser_profile: BrowserProfile | str = BrowserProfile.STANDARD,
+        account: str | None = None,
     ) -> AppConfig:
         root = Path(workspace).expanduser().resolve()
+        account_name = validate_account_name(account)
+        base = (root / "accounts" / account_name).resolve() if account_name else root
         resolved_mode = BrowserMode(browser_mode)
         resolved_profile = BrowserProfile(browser_profile)
         resolved_headless = headless or resolved_mode in {BrowserMode.HEADLESS, BrowserMode.SLEEP}
@@ -92,14 +120,16 @@ class AppConfig(BaseModel):
         retain_sidebar_items = 20 if resolved_profile is BrowserProfile.ULTRALIGHT else 80
         return cls(
             workspace=root,
-            database_path=root / "storage" / "chat_cache.db",
-            profile_dir=root / "profile" / "chromium",
-            logs_dir=root / "logs",
-            exports_dir=root / "exports",
-            config_dir=root / "config",
-            plugins_dir=root / "plugins",
-            runtime_dir=root / "runtime",
-            snippets_dir=root / "work" / "snippets",
+            account=account_name,
+            account_dir=base if account_name else None,
+            database_path=base / "storage" / "chat_cache.db",
+            profile_dir=base / "profile" / "chromium",
+            logs_dir=base / "logs",
+            exports_dir=base / "exports",
+            config_dir=base / "config",
+            plugins_dir=base / "plugins",
+            runtime_dir=base / "runtime",
+            snippets_dir=base / "work" / "snippets",
             offline=offline,
             debug=debug,
             headless=resolved_headless,
@@ -112,7 +142,7 @@ class AppConfig(BaseModel):
         )
 
     def ensure_runtime_dirs(self) -> None:
-        for path in (
+        paths = [
             self.database_path.parent,
             self.profile_dir,
             self.logs_dir,
@@ -121,7 +151,10 @@ class AppConfig(BaseModel):
             self.plugins_dir,
             self.runtime_dir,
             self.snippets_dir,
-        ):
+        ]
+        if self.account_dir is not None:
+            paths.insert(0, self.account_dir)
+        for path in paths:
             path.mkdir(parents=True, exist_ok=True)
             path.chmod(0o700)
 

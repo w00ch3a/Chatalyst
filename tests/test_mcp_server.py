@@ -9,7 +9,12 @@ import pytest
 
 from chatalyst.core.chatgpt import PromptSubmittedNoAssistantResponseError
 from chatalyst.core.config import AppConfig
-from chatalyst.core.mcp_server import ChatalystMCPServer, MCPError, _read_stdin_line
+from chatalyst.core.mcp_server import (
+    ChatalystMCPServer,
+    MCPError,
+    _read_stdin_line,
+    _run_stdio_async,
+)
 from chatalyst.core.models import Conversation, Message, MessageRole, Project, SyncStatus
 from chatalyst.core.runtime import RuntimeLock
 
@@ -108,6 +113,20 @@ def test_mcp_project_name_rejects_blank_value(tmp_path):
         server.cache.close()
 
 
+def test_mcp_prompt_budget_flags_large_local_prompt(tmp_path):
+    server = _server(tmp_path)
+    server.config = server.config.model_copy(update={"mcp_prompt_warning_tokens": 3})
+    try:
+        payload = server._tool_prompt_budget({"prompt": "hello " * 4})
+    finally:
+        server.cache.close()
+
+    assert payload["characters"] == 24
+    assert payload["approximate_tokens"] == 6
+    assert payload["over_warning_threshold"] is True
+    assert payload["suggested_action"] == "summarize_or_stage_context_first"
+
+
 def test_mcp_limit_rejects_bool(tmp_path):
     server = _server(tmp_path)
     try:
@@ -188,6 +207,121 @@ def test_mcp_lists_cached_projects(tmp_path):
     assert payload["projects"][0]["name"] == "Research"
 
 
+def test_mcp_read_only_defers_write_only_services(tmp_path):
+    config = AppConfig.from_workspace(tmp_path)
+    server = ChatalystMCPServer(config, read_only=True)
+    try:
+        assert server.export is None
+        assert server.snippets is None
+    finally:
+        server.cache.close()
+
+
+def test_mcp_tools_reuses_cached_schema(tmp_path):
+    server = _server(tmp_path)
+    try:
+        first = server._tools()
+        second = server._tools()
+    finally:
+        server.cache.close()
+
+    assert first is second
+
+
+def test_mcp_project_scope_avoids_full_conversation_scan(tmp_path):
+    server = _server(tmp_path)
+    conversation = Conversation(
+        id="project-chat",
+        title="Project Chat",
+        project_name="Research Lab",
+        sync_status=SyncStatus.CACHED,
+    )
+    server.cache.upsert_conversation(conversation)
+    server.config = server.config.model_copy(update={"mcp_default_project": "research"})
+    def fail_full_conversation_scan(*args, **kwargs):
+        raise AssertionError("project scope should not load all conversations")
+
+    server.cache.list_conversations = fail_full_conversation_scan  # type: ignore[method-assign]
+    try:
+        scoped = server._resolve_scoped_conversation(required=True)
+    finally:
+        server.cache.close()
+
+    assert scoped is not None
+    assert scoped.id == conversation.id
+
+
+@pytest.mark.asyncio
+async def test_mcp_lists_and_calls_plugin_tool(tmp_path):
+    config = AppConfig.from_workspace(tmp_path, account="research")
+    plugin_dir = config.plugins_dir / "localtools"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "localtools",
+                "version": "0.1.0",
+                "module": "plugin.py",
+                "factory": "create_plugin",
+                "permissions": ["vault.read", "mcp.tools"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (plugin_dir / "plugin.py").write_text(
+        """
+class LocalToolsPlugin:
+    name = "localtools"
+    description = "Local tools"
+
+    def mcp_tools(self, context):
+        return [{
+            "name": "echo",
+            "description": "Echo a bounded value",
+            "input_schema": {
+                "type": "object",
+                "required": ["value"],
+                "properties": {"value": {"type": "string"}}
+            },
+            "read_only": True,
+            "handler": self.echo,
+        }]
+
+    def echo(self, context, arguments):
+        return {"account": context.config.account, "value": arguments["value"]}
+
+def create_plugin():
+    return LocalToolsPlugin()
+""",
+        encoding="utf-8",
+    )
+    server = ChatalystMCPServer(config, read_only=True)
+    try:
+        listed = await server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        called = await server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "chatalyst_plugin_localtools_echo",
+                    "arguments": {"value": "hello"},
+                },
+            }
+        )
+    finally:
+        server.cache.close()
+
+    assert listed is not None
+    assert any(
+        tool["name"] == "chatalyst_plugin_localtools_echo"
+        for tool in listed["result"]["tools"]
+    )
+    assert called is not None
+    payload = json.loads(called["result"]["content"][0]["text"])
+    assert payload == {"account": "research", "value": "hello"}
+
+
 @pytest.mark.asyncio
 async def test_mcp_health_reports_scope_and_cache_counts(tmp_path):
     server = _server(tmp_path)
@@ -240,6 +374,43 @@ def test_mcp_get_conversation_returns_recent_messages_by_default(tmp_path):
     assert payload["messages_truncated"] is True
     assert payload["messages"][0]["markdown"] == "message 10"
     assert payload["messages"][-1]["markdown"] == "message 59"
+
+
+def test_mcp_get_conversation_common_paths_avoid_full_history_read(tmp_path):
+    server = _server(tmp_path)
+    conversation = Conversation(
+        id="chat-1",
+        title="Long Chat",
+        sync_status=SyncStatus.CACHED,
+    )
+    server.cache.upsert_conversation(conversation)
+    for ordinal in range(60):
+        server.cache.upsert_message(
+            Message(
+                id=f"msg-{ordinal}",
+                conversation_id=conversation.id,
+                role=MessageRole.USER,
+                markdown=f"message {ordinal}",
+                ordinal=ordinal,
+            )
+        )
+
+    def fail_full_history_read(*args, **kwargs):
+        raise AssertionError("full message history should not be loaded")
+
+    server.cache.list_messages = fail_full_history_read  # type: ignore[method-assign]
+    try:
+        recent = server._tool_get_conversation({"conversation_id": conversation.id})
+        metadata_only = server._tool_get_conversation(
+            {"conversation_id": conversation.id, "include_messages": False}
+        )
+    finally:
+        server.cache.close()
+
+    assert recent["message_count"] == 60
+    assert recent["messages_returned"] == 50
+    assert metadata_only["messages"] == []
+    assert metadata_only["message_count"] == 60
 
 
 def test_mcp_get_conversation_supports_offset_and_no_messages(tmp_path):
@@ -374,6 +545,8 @@ async def test_mcp_send_payload_reports_submitted_without_response(tmp_path):
     assert payload["messages_returned"] == 1
     assert payload["messages_truncated"] is False
     assert payload["wait_for_response_seconds"] == 12
+    assert payload["prompt_budget"]["approximate_tokens"] == 2
+    assert payload["prompt_budget"]["suggested_action"] == "send"
 
 
 @pytest.mark.asyncio
@@ -417,6 +590,53 @@ async def test_mcp_live_send_payload_returns_bounded_recent_messages(tmp_path):
     assert payload["messages_truncated"] is True
     assert payload["messages"][0]["markdown"] == "message 10"
     assert payload["messages"][-1]["markdown"] == "message 29"
+    assert payload["prompt_budget"]["characters"] == 5
+
+
+@pytest.mark.asyncio
+async def test_mcp_live_send_payload_avoids_full_history_read(tmp_path):
+    server = _server(tmp_path)
+    conversation = Conversation(
+        id="chat-1",
+        title="Long Chat",
+        sync_status=SyncStatus.CACHED,
+    )
+    server.cache.upsert_conversation(conversation)
+    for ordinal in range(30):
+        server.cache.upsert_message(
+            Message(
+                id=f"msg-{ordinal}",
+                conversation_id=conversation.id,
+                role=MessageRole.USER,
+                markdown=f"message {ordinal}",
+                ordinal=ordinal,
+            )
+        )
+
+    def fail_full_history_read(*args, **kwargs):
+        raise AssertionError("full message history should not be loaded")
+
+    server.cache.list_messages = fail_full_history_read  # type: ignore[method-assign]
+
+    class RespondingChatGPT:
+        async def send_message(self, prompt, *, response_timeout_seconds=None):
+            yield Message(
+                id="msg-30",
+                conversation_id=conversation.id,
+                role=MessageRole.ASSISTANT,
+                markdown="message 30",
+                ordinal=30,
+            )
+
+    server.chatgpt = RespondingChatGPT()  # type: ignore[assignment]
+    try:
+        payload = await server._send_prompt_and_payload("hello", wait_seconds=12)
+    finally:
+        server.cache.close()
+
+    assert payload["message_count"] == 30
+    assert payload["messages_returned"] == 20
+    assert payload["messages"][0]["markdown"] == "message 10"
     assert payload["final_message"]["markdown"] == "message 30"
 
 
@@ -679,3 +899,51 @@ async def test_mcp_stdin_read_does_not_block_event_loop(monkeypatch):
         assert ticks > 1
     finally:
         ticker_task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_mcp_stdin_read_uses_bounded_readline(monkeypatch):
+    class RecordingStdin:
+        size: int | None = None
+
+        def readline(self, size: int = -1) -> str:
+            self.size = size
+            return "x" * size
+
+    stdin = RecordingStdin()
+    monkeypatch.setattr("sys.stdin", stdin)
+
+    line = await _read_stdin_line(max_chars=17)
+
+    assert stdin.size == 17
+    assert line == "x" * 17
+
+
+@pytest.mark.asyncio
+async def test_mcp_stdin_oversized_request_returns_error_and_stops(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    class ChunkedOversizedStdin:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def readline(self, size: int = -1) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                return "x" * size
+            raise AssertionError("oversized request should terminate the stdio session")
+
+    stdin = ChunkedOversizedStdin()
+    server = ChatalystMCPServer(AppConfig.from_workspace(tmp_path), read_only=True)
+    monkeypatch.setattr("sys.stdin", stdin)
+
+    exit_code = await _run_stdio_async(server, max_request_bytes=8)
+
+    captured = capsys.readouterr()
+    response = json.loads(captured.out)
+    assert exit_code == 0
+    assert stdin.calls == 1
+    assert response["error"]["code"] == -32600
+    assert response["error"]["message"] == "JSON-RPC request exceeds maximum size."

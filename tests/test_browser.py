@@ -78,8 +78,10 @@ def test_ultralight_browser_profile_tightens_launch_and_pruning():
     assert not policy.should_abort_request("https://auth.openai.com/login", "document")
     assert "--disable-gpu" in policy.chromium_args()
     assert "--process-per-site" in policy.chromium_args()
+    assert "--renderer-process-limit=2" in policy.chromium_args()
     assert "--hide-scrollbars" in policy.chromium_args()
     assert "--no-pings" in policy.chromium_args()
+    assert "--disable-component-extensions-with-background-pages" in policy.chromium_args()
     assert any("Prerender2" in arg for arg in policy.chromium_args())
 
 
@@ -90,7 +92,10 @@ def test_standard_browser_profile_keeps_stylesheets_available():
     assert config.browser_viewport_width == 1440
     assert config.browser_retain_recent_turns == 12
     assert not policy.should_abort_request("https://chatgpt.com/assets/app.css", "stylesheet")
-    assert not policy.should_abort_request("https://example.com/", "document")
+    assert not policy.should_abort_request("https://auth.openai.com/login", "document")
+    assert policy.should_abort_request("https://example.com/", "document")
+    assert "--process-per-site" in policy.chromium_args()
+    assert "--renderer-process-limit=2" in policy.chromium_args()
 
 
 @pytest.mark.asyncio

@@ -19,8 +19,8 @@ dependencies = [
 ]
 
 [project.scripts]
-chatalyst = "chatalyst.app:main"
-chatgpt-tui = "chatalyst.app:main"
+chatalyst = "chatalyst.core.cli:main"
+chatgpt-tui = "chatalyst.core.cli:main"
 chatalyst-mcp = "chatalyst.core.mcp_server:main"
 
 [dependency-groups]

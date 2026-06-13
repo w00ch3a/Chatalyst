@@ -44,6 +44,15 @@ def _row_bool(row: sqlite3.Row, key: str) -> bool:
     return bool(row[key])
 
 
+def _word_count(value: str | None) -> int:
+    return len([part for part in (value or "").split() if part.strip()])
+
+
+def _like_pattern(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 class ChatCache:
     """SQLite-backed local knowledge vault."""
 
@@ -59,6 +68,7 @@ class ChatCache:
             self._connection = sqlite3.connect(self.database_path)
             self.database_path.chmod(0o600)
             self._connection.row_factory = sqlite3.Row
+            self._connection.create_function("chatalyst_word_count", 1, _word_count)
             self._connection.execute("PRAGMA foreign_keys = ON")
             self._connection.execute("PRAGMA journal_mode = WAL")
         return self._connection
@@ -558,11 +568,23 @@ class ChatCache:
         ).fetchone()
         return self._conversation_from_row(row) if row else None
 
-    def list_conversations(self, *, pinned_first: bool = True) -> list[Conversation]:
+    def list_conversations(
+        self,
+        *,
+        pinned_first: bool = True,
+        limit: int | None = None,
+    ) -> list[Conversation]:
         order = "is_pinned DESC, COALESCE(last_opened_at, updated_at) DESC, title COLLATE NOCASE"
         if not pinned_first:
             order = "COALESCE(last_opened_at, updated_at) DESC, title COLLATE NOCASE"
-        rows = self.connection.execute(f"SELECT * FROM conversations ORDER BY {order}").fetchall()
+        sql = f"SELECT * FROM conversations ORDER BY {order}"
+        params: list[Any] = []
+        if limit is not None:
+            if limit <= 0:
+                return []
+            sql = f"{sql} LIMIT ?"
+            params.append(limit)
+        rows = self.connection.execute(sql, params).fetchall()
         return [self._conversation_from_row(row) for row in rows]
 
     def list_recent_conversations(self, *, limit: int = 20) -> list[Conversation]:
@@ -574,6 +596,65 @@ class ChatCache:
             """,
             (limit,),
         ).fetchall()
+        return [self._conversation_from_row(row) for row in rows]
+
+    def find_recent_project_conversation(self, project_name: str) -> Conversation | None:
+        order = "COALESCE(last_opened_at, updated_at) DESC, title COLLATE NOCASE"
+        row = self.connection.execute(
+            f"""
+            SELECT * FROM conversations
+            WHERE project_name COLLATE NOCASE = ?
+            ORDER BY {order}
+            LIMIT 1
+            """,
+            (project_name,),
+        ).fetchone()
+        if row:
+            return self._conversation_from_row(row)
+        row = self.connection.execute(
+            f"""
+            SELECT * FROM conversations
+            WHERE project_name COLLATE NOCASE LIKE ? ESCAPE '\\'
+            ORDER BY {order}
+            LIMIT 1
+            """,
+            (_like_pattern(project_name),),
+        ).fetchone()
+        return self._conversation_from_row(row) if row else None
+
+    def find_conversation_references(
+        self,
+        reference: str,
+        *,
+        partial: bool,
+        limit: int = 2,
+    ) -> list[Conversation]:
+        if limit <= 0:
+            return []
+        order = "COALESCE(last_opened_at, updated_at) DESC, title COLLATE NOCASE"
+        if partial:
+            rows = self.connection.execute(
+                f"""
+                SELECT * FROM conversations
+                WHERE title COLLATE NOCASE LIKE ? ESCAPE '\\'
+                    OR url COLLATE NOCASE LIKE ? ESCAPE '\\'
+                ORDER BY {order}
+                LIMIT ?
+                """,
+                (_like_pattern(reference), _like_pattern(reference), limit),
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                f"""
+                SELECT * FROM conversations
+                WHERE title COLLATE NOCASE = ?
+                    OR chat_identifier COLLATE NOCASE = ?
+                    OR url COLLATE NOCASE = ?
+                ORDER BY {order}
+                LIMIT ?
+                """,
+                (reference, reference, reference, limit),
+            ).fetchall()
         return [self._conversation_from_row(row) for row in rows]
 
     def list_messages(
@@ -596,6 +677,27 @@ class ChatCache:
             params,
         ).fetchall()
         return [self._message_from_row(row) for row in rows]
+
+    def count_messages(self, conversation_id: str) -> int:
+        row = self.connection.execute(
+            "SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()
+        return int(row["count"]) if row else 0
+
+    def list_recent_messages(self, conversation_id: str, *, limit: int) -> list[Message]:
+        if limit <= 0:
+            return []
+        rows = self.connection.execute(
+            """
+            SELECT * FROM messages
+            WHERE conversation_id = ?
+            ORDER BY ordinal DESC, created_at DESC
+            LIMIT ?
+            """,
+            (conversation_id, limit),
+        ).fetchall()
+        return [self._message_from_row(row) for row in reversed(rows)]
 
     def list_notes(self, conversation_id: str) -> list[Note]:
         rows = self.connection.execute(
@@ -657,11 +759,20 @@ class ChatCache:
         conversation = self.get_conversation(conversation_id)
         if conversation is None:
             return None
-        rows = self.list_messages(conversation_id)
+        row = self.connection.execute(
+            """
+            SELECT
+                COUNT(*) AS message_count,
+                COALESCE(SUM(chatalyst_word_count(markdown)), 0) AS word_count
+            FROM messages
+            WHERE conversation_id = ?
+            """,
+            (conversation_id,),
+        ).fetchone()
         return ConversationStats(
             conversation_id=conversation_id,
-            message_count=len(rows),
-            word_count=sum(message.word_count for message in rows),
+            message_count=int(row["message_count"]) if row else 0,
+            word_count=int(row["word_count"]) if row else 0,
             created_at=conversation.created_at,
             last_updated=conversation.updated_at,
             project_name=conversation.project_name,

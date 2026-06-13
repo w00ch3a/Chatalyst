@@ -58,3 +58,60 @@ def test_projects_are_listed_with_urls(tmp_path):
 
     assert [project.name for project in projects] == ["Alpha", "Zulu"]
     assert projects[0].url == "https://chatgpt.com/g/a"
+
+
+def test_conversation_and_message_reads_can_be_bounded_in_sql(tmp_path):
+    cache = ChatCache(tmp_path / "chat_cache.db")
+    cache.initialize()
+    try:
+        for index in range(5):
+            conversation = Conversation(
+                id=f"chat-{index}",
+                title=f"Chat {index}",
+                sync_status=SyncStatus.CACHED,
+            )
+            cache.upsert_conversation(conversation)
+            cache.upsert_message(
+                Message(
+                    id=f"msg-{index}",
+                    conversation_id=conversation.id,
+                    role=MessageRole.USER,
+                    markdown=f"message {index}",
+                    ordinal=index,
+                )
+            )
+
+        assert len(cache.list_conversations(limit=2)) == 2
+        assert cache.count_messages("chat-4") == 1
+        assert cache.list_recent_messages("chat-4", limit=1)[0].markdown == "message 4"
+        assert cache.list_recent_messages("chat-4", limit=0) == []
+    finally:
+        cache.close()
+
+
+def test_conversation_reference_queries_are_bounded(tmp_path):
+    cache = ChatCache(tmp_path / "chat_cache.db")
+    cache.initialize()
+    try:
+        for index in range(4):
+            cache.upsert_conversation(
+                Conversation(
+                    id=f"chat-{index}",
+                    title=f"Research Chat {index}",
+                    url=f"https://chatgpt.com/c/{index}",
+                    chat_identifier=f"identifier-{index}",
+                    project_name="Research Lab" if index >= 2 else "Personal",
+                    sync_status=SyncStatus.CACHED,
+                )
+            )
+
+        exact = cache.find_conversation_references("identifier-1", partial=False)
+        partial = cache.find_conversation_references("Research Chat", partial=True, limit=2)
+        project = cache.find_recent_project_conversation("research")
+    finally:
+        cache.close()
+
+    assert [conversation.id for conversation in exact] == ["chat-1"]
+    assert len(partial) == 2
+    assert project is not None
+    assert project.project_name == "Research Lab"

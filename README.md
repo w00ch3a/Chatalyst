@@ -51,12 +51,22 @@ uv run chatalyst --offline
 Local health check:
 
 ```bash
+uv run chatalyst --create-account personal
+uv run chatalyst --list-accounts
+uv run chatalyst --account personal --login
+uv run chatalyst --account personal
 uv run chatalyst --doctor
 uv run chatalyst --doctor --mcp
 uv run chatalyst --smoke --mcp-read-only
 uv run chatalyst --project-doctor --mcp-default-project "Research"
 uv run chatalyst --set-project-alias work "https://chatgpt.com/g/..."
 ```
+
+Use `--account NAME` when you want separate OpenAI/ChatGPT identities. Account
+mode stores private runtime data under `accounts/NAME/`, including its own
+Chromium profile, SQLite vault, project aliases, plugins, logs, exports,
+runtime lock, and snippets. Leaving `--account` off preserves the original
+single-workspace layout for existing installs.
 
 `--doctor` prints JSON describing the workspace, private runtime paths, cache
 counts, installed command paths, and MCP tool schema when `--mcp` is included.
@@ -87,9 +97,12 @@ uses headed Chromium only as a hidden provider for live ChatGPT work, then close
 it. `background` is kept as an alias for `provider`.
 `sleep` closes Chromium between live ChatGPT operations and wakes it only when
 needed.
-`ultralight` additionally blocks images, media, fonts, stylesheets, telemetry
-endpoints, non-ChatGPT document navigations, audio, pings, smooth scrolling, and
-unused Chromium services. Chatalyst intentionally does not use
+The standard browser profile blocks images, media, fonts, telemetry endpoints,
+non-ChatGPT document navigations, audio, pings, background services, extra
+extension services, and keeps Chromium to a small renderer process budget.
+`ultralight` additionally blocks stylesheets, shrinks the viewport, and prunes
+more of the visible ChatGPT DOM for MCP/SSH workloads. Chatalyst intentionally
+does not use
 `--single-process`; it is unstable for persistent authenticated Chromium
 sessions.
 
@@ -142,11 +155,17 @@ Exports are written to `exports/` in Markdown, HTML, JSON, or TXT.
 
 ## Plugin System
 
-The initial plugin seam is in `chatalyst/core/plugins.py`. Plugins can observe startup,
-conversation opens, cached messages, search results, and exports. This reserves
-space for local file search, note-vault integration, Git integration, knowledge
-indexing, or document search without coupling those integrations to browser
-automation.
+The plugin system is manifest-backed and local-only. Plugins can observe
+startup, conversation opens, cached messages, search results, and exports. With
+an explicit `mcp.tools` permission, a plugin can also contribute namespaced MCP
+tools such as `chatalyst_plugin_localfiles_search`. This reserves space for
+local file search, note-vault integration, Git integration, knowledge indexing,
+or document search without coupling those integrations to browser automation.
+
+Plugins live in `plugins/` for legacy single-workspace installs, or in
+`accounts/NAME/plugins/` when `--account NAME` is used. Plugin load/skip/tool
+registration decisions are written to `logs/plugin-audit.jsonl` with owner-only
+file permissions.
 
 See [docs/Plugins.md](docs/Plugins.md) for the local plugin manifest format and
 a minimal plugin skeleton.
@@ -160,6 +179,7 @@ examples.
 ```bash
 uv run chatalyst-mcp
 uv run chatalyst --mcp
+uv run chatalyst --account personal --mcp
 uv run chatalyst --mcp --browser-mode provider
 uv run chatalyst --mcp --browser-mode background
 uv run chatalyst --mcp --browser-mode visible
@@ -168,6 +188,7 @@ uv run chatalyst --mcp --mcp-read-only
 uv run chatalyst --mcp --offline
 uv run chatalyst --mcp --debug
 uv run chatalyst --mcp --mcp-live-response-timeout-seconds 180
+uv run chatalyst --mcp --mcp-token-frugal
 uv run chatalyst --mcp --mcp-default-project "Research"
 uv run chatalyst --mcp --mcp-default-conversation "Daily work thread"
 ```
@@ -176,8 +197,11 @@ It exposes the local knowledge vault, not raw browser or terminal control. The
 first tool set includes:
 
 - `chatalyst_health`
+- `chatalyst_get_scope`
+- `chatalyst_prompt_budget`
 - `chatalyst_search`
 - `chatalyst_list_conversations`
+- `chatalyst_list_projects`
 - `chatalyst_get_conversation`
 - `chatalyst_list_bookmarks`
 - `chatalyst_export_conversation`
@@ -194,6 +218,8 @@ MCP tool choice:
 
 - Use `chatalyst_search`, `chatalyst_list_conversations`, and
   `chatalyst_get_conversation` to inspect the local vault.
+- Use `chatalyst_prompt_budget` before large live sends when an agent needs a
+  cheap local size check without waking Chromium or spending a ChatGPT turn.
 - Use `chatalyst_reply_to_conversation` to continue work or research in an
   existing ChatGPT thread.
 - Use `chatalyst_send_new_message` when a fresh ChatGPT thread is the right
@@ -232,6 +258,7 @@ uses its own flag names:
 
 ```bash
 uv run chatalyst-mcp --workspace /path/to/chatalyst --read-only
+uv run chatalyst-mcp --workspace /path/to/chatalyst --account personal
 uv run chatalyst-mcp --workspace /path/to/chatalyst --browser-mode provider
 uv run chatalyst-mcp --workspace /path/to/chatalyst --mcp-default-project "Research"
 uv run chatalyst-mcp --workspace /path/to/chatalyst --mcp-default-conversation "Daily work thread"
@@ -252,6 +279,15 @@ call when the MCP host can tolerate it, or change
 long reasoning or research turns. If the user message lands but no
 assistant response appears before the timeout, MCP returns
 `status: submitted_no_response` instead of encouraging duplicate resends.
+
+Use `--mcp-token-frugal` for agent loops that should keep MCP payloads tight.
+It lowers the default live result message window from 20 to 6 unless you
+explicitly set `--mcp-live-result-message-limit`, and live send/reply results
+include `prompt_budget` metadata with character, word, and approximate token
+counts. Adjust the local warning threshold with
+`--mcp-prompt-warning-tokens`. Common live result and recent conversation reads
+ask SQLite only for the bounded window being returned; the full conversation
+remains cached locally.
 
 Point MCP clients at the project directory so the server can use the same
 `storage/`, `exports/`, and `work/` folders as the TUI:
@@ -276,6 +312,8 @@ directly:
   "args": [
     "--workspace",
     "/home/user/.local/share/chatalyst",
+    "--account",
+    "personal",
     "--browser-mode",
     "provider",
     "--browser-profile",

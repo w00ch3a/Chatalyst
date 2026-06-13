@@ -11,24 +11,32 @@ The MCP server uses the same local workspace folders as the TUI:
 - `work/` for staged snippets and local work products
 - `profile/chromium/` for the authenticated Chromium profile
 
+For multiple OpenAI/ChatGPT accounts, use `--account NAME`. Account mode stores
+the same runtime folders under `accounts/NAME/` so each account has its own
+Chromium profile, SQLite vault, project aliases, plugins, logs, exports, and
+runtime lock.
+
 Log in once with a visible browser on the same machine:
 
 ```bash
 uv sync
 uv run playwright install chromium
 uv run chatalyst --login
+uv run chatalyst --account personal --login
 ```
 
 After login, run MCP mode from the project directory:
 
 ```bash
 uv run chatalyst --mcp --browser-mode provider
+uv run chatalyst --account personal --mcp --browser-mode provider
 ```
 
 Or use the standalone entry point:
 
 ```bash
 uv run chatalyst-mcp --workspace /path/to/chatalyst --browser-mode provider
+uv run chatalyst-mcp --workspace /path/to/chatalyst --account personal --browser-mode provider
 ```
 
 `provider` mode keeps Chatalyst as a terminal/stdio service and opens Chromium
@@ -40,6 +48,7 @@ Before connecting an MCP client, run a local check:
 
 ```bash
 uv run chatalyst --doctor --mcp --browser-mode provider
+uv run chatalyst --account personal --doctor --mcp --browser-mode provider
 uv run chatalyst --smoke --mcp-read-only --browser-mode provider
 uv run chatalyst --project-doctor --mcp-default-project "Research"
 uv run chatalyst --set-project-alias research "https://chatgpt.com/g/..."
@@ -74,6 +83,8 @@ Correct:
         "/path/to/chatalyst",
         "chatalyst",
         "--mcp",
+        "--account",
+        "personal",
         "--browser-mode",
         "provider",
         "--mcp-default-project",
@@ -108,8 +119,13 @@ The same split-row rule applies when launching `chatalyst-mcp` directly:
   "args": [
     "--workspace",
     "/home/user/.local/share/chatalyst",
+    "--account",
+    "personal",
     "--browser-mode",
     "provider",
+    "--browser-profile",
+    "ultralight",
+    "--mcp-token-frugal",
     "--mcp-default-project",
     "Research",
     "--mcp-live-response-timeout-seconds",
@@ -119,6 +135,11 @@ The same split-row rule applies when launching `chatalyst-mcp` directly:
 }
 ```
 
+Requests are read with a bounded stdio line size. If a client sends a JSON-RPC
+line larger than `--max-request-bytes`, Chatalyst returns one protocol error and
+closes the MCP stdio session instead of continuing to process chunks of the same
+oversized request.
+
 Private project aliases:
 
 ```json
@@ -127,6 +148,8 @@ Private project aliases:
   "args": [
     "--workspace",
     "/home/user/.local/share/chatalyst",
+    "--account",
+    "personal",
     "--browser-mode",
     "provider",
     "--mcp-default-project",
@@ -140,13 +163,36 @@ For read-only local automation, add `--read-only` to `chatalyst-mcp` or
 `--mcp-read-only` to `chatalyst --mcp`. Read-only mode exposes vault inspection
 tools without exports, staged snippets, or live ChatGPT sends.
 
+For long-running agent loops, add `--mcp-token-frugal`. It lowers the default
+live result message window from 20 to 6 unless you explicitly pass
+`--mcp-live-result-message-limit`, and live send/reply responses include
+`prompt_budget` metadata. Use the read-only `chatalyst_prompt_budget` tool when
+an agent wants a cheap local prompt-size check before spending a live ChatGPT
+turn. Tune the warning threshold with `--mcp-prompt-warning-tokens`.
+
 ## Health Tool
 
 MCP clients can call `chatalyst_health` before doing live work. By default it
 does not start Chromium; it reports workspace paths, configured scope, cached
-projects, runtime lock status, cache counts, browser mode/profile, and whether a
-default project has cached conversations. Pass `check_browser: true` only when
-you intentionally want a live browser/login check.
+projects, account scope, runtime lock status, cache counts, browser
+mode/profile, plugin state, and whether a default project has cached
+conversations. It also reports token-frugal mode, the prompt warning threshold,
+and the live result message limit. Pass `check_browser: true` only when you
+intentionally want a live browser/login check.
+
+## Plugin Tools
+
+Trusted local plugins can contribute MCP tools when their manifest declares the
+`mcp.tools` permission. Plugin tools appear in `tools/list` with the prefix:
+
+```text
+chatalyst_plugin_<plugin-name>_<tool-name>
+```
+
+Read-only MCP mode only exposes read-only plugin tools. Plugin load and tool
+registration decisions are recorded in `logs/plugin-audit.jsonl`, or
+`accounts/<account>/logs/plugin-audit.jsonl` when `--account` is used. See
+`docs/Plugins.md` for the plugin manifest and handler contract.
 
 ## Project Scope Proof
 

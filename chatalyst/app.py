@@ -8,518 +8,27 @@ import sys
 import termios
 import tty
 from pathlib import Path
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
 
 from loguru import logger
-from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header
 
-from chatalyst.core.browser import BrowserController, BrowserUnavailableError
-from chatalyst.core.cache import ChatCache
-from chatalyst.core.chatgpt import ChatGPTService, SelectorResolutionError
-from chatalyst.core.config import AppConfig
-from chatalyst.core.export import ExportFormat, ExportService
-from chatalyst.core.mcp_server import ChatalystMCPServer, run_stdio
-from chatalyst.core.models import (
-    BrowserSessionStatus,
-    BrowserState,
-    Conversation,
-    LoginState,
-    Note,
-    Snippet,
-)
-from chatalyst.core.plugins import PluginContext, PluginRegistry
-from chatalyst.core.privacy import redact_project_refs
-from chatalyst.core.project_aliases import ProjectAliasResolver
-from chatalyst.core.runtime import RuntimeLock, RuntimeLockError
-from chatalyst.core.search import SearchEngine
-from chatalyst.core.snippets import SnippetService
-from chatalyst.core.terminal import TerminalRunner, TerminalTimeoutError
 from chatalyst.core.version import package_version
-from chatalyst.widgets.bookmark_panel import BookmarkPanel
-from chatalyst.widgets.chat_list import ChatList
-from chatalyst.widgets.command_palette import CommandPalette
-from chatalyst.widgets.conversation_view import ConversationView
-from chatalyst.widgets.message_input import MessageInput
-from chatalyst.widgets.notes_panel import NotesPanel
-from chatalyst.widgets.search_dialog import SearchDialog
-from chatalyst.widgets.snippet_panel import SnippetPanel
-from chatalyst.widgets.status_bar import StatusBar
 
+if TYPE_CHECKING:
+    from chatalyst.core.config import AppConfig
 
-class ChatGPTTUI(App[None]):
-    CSS = """
-    Screen {
-        layout: vertical;
-    }
-    #workspace {
-        height: 1fr;
-    }
-    #conversation-pane {
-        width: 1fr;
-    }
-    #compare-pane {
-        width: 1fr;
-        display: none;
-    }
-    """
-
-    BINDINGS = [
-        ("j", "cursor_down", "Down"),
-        ("k", "cursor_up", "Up"),
-        ("enter", "open_selected", "Open"),
-        ("tab", "focus_next", "Next pane"),
-        ("/", "search", "Search"),
-        ("n", "new_chat", "New"),
-        ("r", "refresh", "Refresh"),
-        ("b", "bookmarks", "Bookmarks"),
-        ("x", "stage_last_code", "Stage"),
-        ("p", "palette", "Palette"),
-        ("ctrl+p", "palette", "Palette"),
-        ("ctrl+b", "safe_browser", "Browser"),
-        ("q", "quit", "Quit"),
-    ]
-
-    def __init__(self, config: AppConfig) -> None:
-        super().__init__()
-        self.config = config
-        self.config.ensure_runtime_dirs()
-        self.runtime_lock = RuntimeLock(config.runtime_lock_path)
-        self.runtime_lock.acquire()
-        try:
-            logger.add(config.logs_dir / "chatgpt-tui.log", rotation="2 MB", retention=5)
-            self.cache = ChatCache(config.database_path)
-            self.cache.initialize()
-            self.search_engine = SearchEngine(self.cache)
-            self.export_service = ExportService(self.cache, config.exports_dir)
-            self.terminal = TerminalRunner(
-                cwd=config.workspace,
-                timeout_seconds=config.terminal_timeout_seconds,
-                output_limit=config.terminal_output_limit,
-            )
-            self.snippets = SnippetService(cache=self.cache, snippets_dir=config.snippets_dir)
-            self.browser = BrowserController(config)
-            self.chatgpt = ChatGPTService(config, self.browser, self.cache)
-            self.plugins = PluginRegistry()
-            self.plugins.load_from_directory(config.plugins_dir)
-            self.plugin_context = PluginContext(config=config, cache=self.cache)
-            self.status_model = BrowserSessionStatus(
-                browser_state=BrowserState.STOPPED,
-                login_state=LoginState.UNKNOWN,
-                offline=config.offline,
-            )
-            self.current_conversation: Conversation | None = None
-            self.current_messages = []
-        except Exception:
-            self.runtime_lock.release()
-            raise
-
-    def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        with Horizontal(id="workspace"):
-            yield ChatList(id="chat-list")
-            with Vertical(id="conversation-pane"):
-                yield ConversationView()
-            with Vertical(id="compare-pane"):
-                yield ConversationView(id="compare-view")
-        yield MessageInput()
-        yield StatusBar()
-        yield Footer()
-
-    async def on_mount(self) -> None:
-        self.plugins.startup(self.plugin_context)
-        await self._load_cached_chats()
-        self.query_one(ChatList).focus()
-        if self.config.offline:
-            self._set_status(sync="offline")
-            return
-        asyncio.create_task(self._initial_online_sync())
-
-    async def _initial_online_sync(self) -> None:
-        self._set_status(sync="starting")
-        try:
-            self.status_model = await self.chatgpt.status()
-            if self.status_model.login_state is LoginState.LOGGED_IN:
-                await self.browser.restart_headless_after_login()
-                await self.refresh_chats()
-            else:
-                self.query_one(ConversationView).show_diagnostic(
-                    "Login Required",
-                    "A Chromium window is open. Log in to ChatGPT there, "
-                    "then press `r` to refresh.",
-                )
-        except Exception as exc:
-            logger.exception("Initial sync failed")
-            self.status_model = BrowserSessionStatus(
-                browser_state=BrowserState.ERROR,
-                login_state=LoginState.UNKNOWN,
-                diagnostic=str(exc),
-            )
-            self.query_one(ConversationView).show_diagnostic(
-                "Browser Diagnostic",
-                f"Startup failed:\n\n```text\n{exc}\n```\n\n"
-                "Press `Ctrl+B` to reveal/restart the browser.",
-            )
-        finally:
-            if self.status_model.login_state is LoginState.LOGGED_IN:
-                await self.browser.park_after_work()
-            self._set_status()
-
-    async def _load_cached_chats(self) -> None:
-        conversations = self.cache.list_conversations()
-        self.query_one(ChatList).load_conversations(conversations)
-        if conversations and self.current_conversation is None:
-            await self.open_conversation(conversations[0].id, browser_backed=False)
-
-    async def refresh_chats(self) -> None:
-        self._set_status(sync="syncing")
-        try:
-            if self.config.offline:
-                await self._load_cached_chats()
-                return
-            await self.chatgpt.discover_chats()
-            await self._load_cached_chats()
-        except SelectorResolutionError as exc:
-            self.query_one(ConversationView).show_diagnostic(
-                "Selector Diagnostic",
-                f"{exc.diagnostic.message}\n\nAttempted:\n\n"
-                + "\n".join(f"- `{selector}`" for selector in exc.diagnostic.attempted),
-            )
-        except BrowserUnavailableError as exc:
-            self.query_one(ConversationView).show_diagnostic("Browser Offline", str(exc))
-        except Exception as exc:
-            logger.exception("Refresh failed")
-            self.query_one(ConversationView).show_diagnostic(
-                "Refresh Failed", f"```text\n{exc}\n```"
-            )
-        finally:
-            self._set_status()
-
-    async def open_conversation(self, conversation_id: str, *, browser_backed: bool = True) -> None:
-        self._set_status(sync="opening")
-        try:
-            if browser_backed and not self.config.offline:
-                result = await self.chatgpt.open_conversation(conversation_id)
-                conversation = result.conversation
-                messages = result.messages
-            else:
-                conversation = self.cache.get_conversation(conversation_id)
-                if conversation is None:
-                    return
-                self.cache.mark_opened(conversation_id)
-                messages = self.cache.list_messages(conversation_id)
-            self.current_conversation = conversation
-            self.current_messages = messages
-            self.plugins.conversation_opened(self.plugin_context, conversation_id)
-            self.query_one(ConversationView).show_conversation(conversation, messages)
-            self._set_status()
-        except SelectorResolutionError as exc:
-            self.query_one(ConversationView).show_diagnostic(
-                "Selector Diagnostic", exc.diagnostic.message
-            )
-        except Exception as exc:
-            logger.exception("Open conversation failed")
-            self.query_one(ConversationView).show_diagnostic(
-                "Open Failed", f"```text\n{exc}\n```"
-            )
-        finally:
-            await self._load_cached_chats()
-            await self.browser.park_after_work()
-            self._set_status()
-
-    async def action_cursor_down(self) -> None:
-        self.query_one(ChatList).action_cursor_down()
-
-    async def action_cursor_up(self) -> None:
-        self.query_one(ChatList).action_cursor_up()
-
-    async def action_open_selected(self) -> None:
-        conversation = self.query_one(ChatList).selected_conversation
-        if conversation:
-            await self.open_conversation(conversation.id)
-
-    async def action_refresh(self) -> None:
-        await self.refresh_chats()
-
-    async def action_new_chat(self) -> None:
-        if self.config.offline:
-            self.notify("Offline mode cannot create browser chats.", severity="warning")
-            return
-        conversation = await self.chatgpt.new_chat()
-        self.current_conversation = conversation
-        await self._load_cached_chats()
-        self.query_one(MessageInput).focus()
-
-    async def action_safe_browser(self) -> None:
-        try:
-            await self.browser.restart_visible()
-            self.notify("Browser window revealed.")
-        except Exception as exc:
-            self.notify(f"Browser reveal failed: {exc}", severity="error")
-
-    async def action_search(self) -> None:
-        self.push_screen(SearchDialog(), self._handle_search_dialog)
-
-    def _handle_search_dialog(self, value: str | None) -> None:
-        if not value:
-            return
-        if self.cache.get_conversation(value):
-            asyncio.create_task(
-                self.open_conversation(value, browser_backed=not self.config.offline)
-            )
-            return
-        results = self.plugins.search_results(
-            self.plugin_context,
-            value,
-            self.search_engine.search(value),
-        )
-        self.push_screen(SearchDialog(results), self._handle_search_dialog)
-
-    async def action_bookmarks(self) -> None:
-        self.push_screen(BookmarkPanel(self.cache.list_bookmarks()), self._handle_bookmark_panel)
-
-    def _handle_bookmark_panel(self, conversation_id: str | None) -> None:
-        if conversation_id:
-            asyncio.create_task(self.open_conversation(conversation_id, browser_backed=False))
-
-    async def action_palette(self) -> None:
-        self.push_screen(CommandPalette(), self._handle_palette)
-
-    def _handle_palette(self, command: str | None) -> None:
-        if not command:
-            return
-        if command == "search":
-            asyncio.create_task(self.action_search())
-        elif command == "refresh":
-            asyncio.create_task(self.refresh_chats())
-        elif command == "export":
-            self._export_current()
-        elif command == "bookmark":
-            self._bookmark_current()
-        elif command == "notes":
-            self._open_notes()
-        elif command == "recent":
-            self.query_one(ChatList).load_conversations(self.cache.list_recent_conversations())
-        elif command == "split":
-            self._toggle_split()
-        elif command == "open":
-            asyncio.create_task(self.action_open_selected())
-        elif command == "stage":
-            asyncio.create_task(self.action_stage_last_code())
-
-    def _open_notes(self) -> None:
-        if not self.current_conversation:
-            return
-        notes = self.cache.list_notes(self.current_conversation.id)
-        self.push_screen(NotesPanel(notes), self._handle_notes)
-
-    def _handle_notes(self, body: str | None) -> None:
-        if body is None or not self.current_conversation:
-            return
-        self.cache.upsert_note(Note(conversation_id=self.current_conversation.id, body=body))
-        self.notify("Notes saved locally.")
-
-    def _bookmark_current(self) -> None:
-        if not self.current_conversation or not self.current_messages:
-            return
-        message = self.current_messages[-1]
-        self.cache.bookmark_message(
-            self.current_conversation.id,
-            message.id,
-            label=f"{self.current_conversation.title}: {message.role.value}",
-        )
-        self.notify("Bookmarked current message.")
-
-    def _export_current(self) -> None:
-        if not self.current_conversation:
-            return
-        path = self.export_service.export_conversation(
-            self.current_conversation.id, ExportFormat.MARKDOWN
-        )
-        self.notify(f"Exported {path.name}")
-
-    def _toggle_split(self) -> None:
-        pane = self.query_one("#compare-pane")
-        pane.styles.display = "block" if pane.styles.display == "none" else "none"
-        if self.current_conversation:
-            self.query_one("#compare-view", ConversationView).show_conversation(
-                self.current_conversation,
-                self.current_messages,
-            )
-
-    async def action_stage_last_code(self) -> None:
-        if not self.current_conversation:
-            self.notify("Open a cached conversation first.", severity="warning")
-            return
-        snippet = self.snippets.stage_last_code_block(self.current_conversation.id)
-        if snippet is None:
-            self.notify("No runnable code block found in this conversation.", severity="warning")
-            return
-        self.push_screen(
-            SnippetPanel(snippet),
-            lambda action: self._handle_snippet(snippet, action),
-        )
-
-    def _handle_snippet(self, snippet: Snippet, action: str | None) -> None:
-        if action == "copy":
-            self.copy_to_clipboard(snippet.body)
-            self.notify("Snippet copied.")
-        elif action == "save":
-            self.notify(f"Snippet saved to {snippet.path}")
-        elif action == "run":
-            asyncio.create_task(self._run_snippet(snippet))
-
-    async def _run_snippet(self, snippet: Snippet) -> None:
-        self._set_status(sync="snippet")
-        try:
-            result = await self.snippets.run(snippet, self.terminal)
-            self.query_one(ConversationView).show_diagnostic("Snippet Result", result.as_markdown())
-        except Exception as exc:
-            self.query_one(ConversationView).show_diagnostic(
-                "Snippet Error",
-                f"```text\n{exc}\n```",
-            )
-        finally:
-            self._set_status()
-
-    async def on_input_submitted(self, event: MessageInput.Submitted) -> None:
-        value = event.value.strip()
-        event.input.value = ""
-        if value.startswith("/search "):
-            results = self.search_engine.search(value.removeprefix("/search ").strip())
-            self.push_screen(SearchDialog(results), self._handle_search_dialog)
-            return
-        if value.startswith("/tag ") and self.current_conversation:
-            from chatalyst.core.models import Tag
-
-            self.cache.apply_tag(
-                self.current_conversation.id,
-                Tag(name=value.removeprefix("/tag ")),
-            )
-            await self._load_cached_chats()
-            return
-        if value.startswith("/note ") and self.current_conversation:
-            self.cache.upsert_note(
-                Note(
-                    conversation_id=self.current_conversation.id,
-                    body=value.removeprefix("/note "),
-                )
-            )
-            return
-        if value.startswith("/terminal "):
-            await self._run_terminal_command(value.removeprefix("/terminal ").strip())
-            return
-        if value == "/stage last":
-            await self.action_stage_last_code()
-            return
-        if value.startswith("/stage "):
-            self._stage_inline_text(value.removeprefix("/stage ").strip())
-            return
-        if not value:
-            return
-        if self.config.offline:
-            self.notify(
-                "Offline mode can browse, search, note, bookmark, and export only.",
-                severity="warning",
-            )
-            return
-        await self._send_prompt(value)
-
-    async def _send_prompt(self, prompt: str) -> None:
-        self._set_status(sync="streaming")
-        try:
-            async for message in self.chatgpt.send_message(prompt):
-                conversation_id = message.conversation_id
-                conversation = (
-                    self.cache.get_conversation(conversation_id) or self.current_conversation
-                )
-                if conversation is None:
-                    continue
-                self.current_conversation = conversation
-                self.current_messages = self.cache.list_messages(conversation.id)
-                if message not in self.current_messages:
-                    self.current_messages.append(message)
-                self.query_one(ConversationView).show_streaming_message(
-                    conversation,
-                    self.current_messages,
-                )
-        except Exception as exc:
-            logger.exception("Send failed")
-            self.query_one(ConversationView).show_diagnostic("Send Failed", f"```text\n{exc}\n```")
-        finally:
-            await self._load_cached_chats()
-            await self.browser.park_after_work()
-            self._set_status()
-
-    def _stage_inline_text(self, value: str) -> None:
-        language = None
-        body = value
-        for prefix, detected in (
-            ("bash ", "bash"),
-            ("shell ", "bash"),
-            ("sh ", "bash"),
-            ("python ", "python"),
-            ("py ", "python"),
-            ("text ", None),
-        ):
-            if value.startswith(prefix):
-                language = detected
-                body = value.removeprefix(prefix)
-                break
-        if not body.strip():
-            self.notify("No snippet text provided.", severity="warning")
-            return
-        snippet = self.snippets.stage_text(
-            conversation_id=self.current_conversation.id if self.current_conversation else None,
-            message_id=None,
-            body=body,
-            language=language,
-        )
-        self.push_screen(
-            SnippetPanel(snippet),
-            lambda action: self._handle_snippet(snippet, action),
-        )
-
-    async def _run_terminal_command(self, command: str) -> None:
-        self._set_status(sync="terminal")
-        try:
-            result = await self.terminal.run(command)
-            self.query_one(ConversationView).show_diagnostic("Terminal", result.as_markdown())
-        except TerminalTimeoutError as exc:
-            self.query_one(ConversationView).show_diagnostic(
-                "Terminal Timeout",
-                f"```text\n{exc}\n```",
-            )
-        except Exception as exc:
-            self.query_one(ConversationView).show_diagnostic(
-                "Terminal Error",
-                f"```text\n{exc}\n```",
-            )
-        finally:
-            self._set_status()
-
-    def _set_status(self, *, sync: str = "idle") -> None:
-        self.query_one(StatusBar).update_status(
-            self.status_model,
-            conversation=self.current_conversation,
-            sync=sync,
-        )
-
-    async def on_unmount(self) -> None:
-        try:
-            await self.browser.stop()
-        except Exception:
-            logger.exception("Browser stop failed during shutdown")
-        finally:
-            try:
-                self.cache.close()
-            finally:
-                self.runtime_lock.release()
+DEFAULT_MCP_LIVE_RESULT_MESSAGE_LIMIT = 20
+FRUGAL_MCP_LIVE_RESULT_MESSAGE_LIMIT = 6
 
 
 async def run_interactive_login(config: AppConfig) -> int:
     """Open the persistent browser profile and wait for manual ChatGPT login."""
+
+    from chatalyst.core.browser import BrowserController
+    from chatalyst.core.cache import ChatCache
+    from chatalyst.core.chatgpt import ChatGPTService
+    from chatalyst.core.models import LoginState
+    from chatalyst.core.runtime import RuntimeLock
 
     config.ensure_runtime_dirs()
     runtime_lock = RuntimeLock(config.runtime_lock_path)
@@ -604,14 +113,16 @@ def wait_for_terminal_return(stdin: TextIO | None = None) -> bool:
 def run_doctor(config: AppConfig, *, include_mcp: bool, max_text_chars: int) -> int:
     """Run local configuration checks without opening ChatGPT."""
 
+    from chatalyst.core.mcp_server import ChatalystMCPServer
+
     config.ensure_runtime_dirs()
     server = ChatalystMCPServer(config, read_only=config.offline, max_text_chars=max_text_chars)
-    plugins = PluginRegistry()
-    plugins.load_from_directory(config.plugins_dir)
     try:
         counts = server._cache_counts()
         scope = server._tool_get_scope({})
         tools = server._tools() if include_mcp else []
+        plugin_names = list(server.plugins.names)
+        plugin_count = len(server.plugins.plugins)
     finally:
         server.cache.close()
 
@@ -623,6 +134,8 @@ def run_doctor(config: AppConfig, *, include_mcp: bool, max_text_chars: int) -> 
         "exports": config.exports_dir,
         "snippets": config.snippets_dir,
     }
+    if config.account_dir is not None:
+        paths["account_dir"] = config.account_dir
     path_status = {
         name: {
             "path": str(path),
@@ -634,6 +147,8 @@ def run_doctor(config: AppConfig, *, include_mcp: bool, max_text_chars: int) -> 
     payload = {
         "ok": True,
         "workspace": str(config.workspace),
+        "account": config.account,
+        "account_dir": str(config.account_dir) if config.account_dir else None,
         "offline": config.offline,
         "browser_mode": config.browser_mode.value,
         "browser_profile": config.browser_profile.value,
@@ -645,7 +160,7 @@ def run_doctor(config: AppConfig, *, include_mcp: bool, max_text_chars: int) -> 
         "paths": path_status,
         "cache_counts": counts,
         "runtime_lock": server._runtime_lock_status(),
-        "plugins": {"count": len(plugins.plugins), "names": list(plugins.names)},
+        "plugins": {"count": plugin_count, "names": plugin_names},
         "scope": scope,
         "mcp": {
             "checked": include_mcp,
@@ -657,8 +172,47 @@ def run_doctor(config: AppConfig, *, include_mcp: bool, max_text_chars: int) -> 
     return 0
 
 
+def run_create_account(workspace: Path, account: str) -> int:
+    from chatalyst.core.config import AppConfig
+
+    config = AppConfig.from_workspace(workspace, account=account)
+    config.ensure_runtime_dirs()
+    payload = {
+        "ok": True,
+        "account": config.account,
+        "account_dir": str(config.account_dir),
+        "profile_dir": str(config.profile_dir),
+        "database_path": str(config.database_path),
+        "plugins_dir": str(config.plugins_dir),
+    }
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+def run_list_accounts(workspace: Path) -> int:
+    from chatalyst.core.config import validate_account_name
+
+    root = workspace.expanduser().resolve()
+    accounts_dir = root / "accounts"
+    accounts: list[dict[str, str]] = []
+    if accounts_dir.exists():
+        for path in sorted(accounts_dir.iterdir(), key=lambda item: item.name.casefold()):
+            if not path.is_dir():
+                continue
+            try:
+                account = validate_account_name(path.name)
+            except ValueError:
+                continue
+            if account is not None:
+                accounts.append({"name": account, "path": str(path.resolve())})
+    print(json.dumps({"workspace": str(root), "accounts": accounts}, indent=2))
+    return 0
+
+
 def run_mcp_smoke(config: AppConfig, *, read_only: bool, max_text_chars: int) -> int:
     """Run a local MCP JSON-RPC smoke test without opening ChatGPT."""
+
+    from chatalyst.core.mcp_server import ChatalystMCPServer
 
     config.ensure_runtime_dirs()
     server = ChatalystMCPServer(config, read_only=read_only, max_text_chars=max_text_chars)
@@ -716,6 +270,12 @@ def run_set_project_alias(config: AppConfig, *, alias: str, target: str) -> int:
 
 async def run_project_doctor(config: AppConfig, *, project_reference: str | None) -> int:
     """Inspect visible ChatGPT projects and optional project scope opening."""
+
+    from chatalyst.core.browser import BrowserController
+    from chatalyst.core.cache import ChatCache
+    from chatalyst.core.chatgpt import ChatGPTService
+    from chatalyst.core.privacy import redact_project_refs
+    from chatalyst.core.project_aliases import ProjectAliasResolver
 
     config.ensure_runtime_dirs()
     cache = ChatCache(config.database_path)
@@ -794,6 +354,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Chatalyst workspace containing profile/, storage/, exports/, and work/.",
     )
     parser.add_argument(
+        "--account",
+        help=(
+            "Use an isolated account under workspace/accounts/ACCOUNT. Each account "
+            "has its own Chromium profile, SQLite vault, plugins, logs, and exports."
+        ),
+    )
+    parser.add_argument(
+        "--create-account",
+        metavar="ACCOUNT",
+        help="Create an isolated account workspace and exit.",
+    )
+    parser.add_argument(
+        "--list-accounts",
+        action="store_true",
+        help="List isolated account workspaces and exit.",
+    )
+    parser.add_argument(
         "--offline",
         action="store_true",
         help="Browse cached chats without browser access.",
@@ -866,8 +443,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mcp-live-result-message-limit",
         type=int,
-        default=20,
+        default=None,
         help="Recent messages returned by live MCP send/reply tools; full history remains cached.",
+    )
+    parser.add_argument(
+        "--mcp-token-frugal",
+        action="store_true",
+        help=(
+            "Reduce default live MCP result payloads and report prompt-size budgeting "
+            "metadata for agents."
+        ),
+    )
+    parser.add_argument(
+        "--mcp-prompt-warning-tokens",
+        type=int,
+        default=4_000,
+        help="Approximate prompt-token threshold reported by MCP prompt budgeting.",
     )
     parser.add_argument(
         "--mcp-default-conversation",
@@ -914,9 +505,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _mcp_live_result_message_limit(args: argparse.Namespace) -> int:
+    if args.mcp_live_result_message_limit is not None:
+        return int(args.mcp_live_result_message_limit)
+    if args.mcp_token_frugal:
+        return FRUGAL_MCP_LIVE_RESULT_MESSAGE_LIMIT
+    return DEFAULT_MCP_LIVE_RESULT_MESSAGE_LIMIT
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    from chatalyst.core.config import AppConfig, validate_account_name
+
     if args.login and args.mcp:
         parser.error("--login cannot be combined with --mcp")
     if args.login and args.doctor:
@@ -929,11 +530,22 @@ def main() -> None:
         parser.error("--login cannot be combined with --set-project-alias")
     browser_mode = "headless" if args.headless else args.browser_mode
     workspace = args.workspace.expanduser().resolve()
+    try:
+        account = validate_account_name(args.account)
+        create_account = validate_account_name(args.create_account)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.list_accounts:
+        raise SystemExit(run_list_accounts(workspace))
+    if create_account:
+        raise SystemExit(run_create_account(workspace, create_account))
     if args.repair_stale_lock:
-        probe_config = AppConfig.from_workspace(workspace)
+        from chatalyst.core.runtime import RuntimeLock
+
+        probe_config = AppConfig.from_workspace(workspace, account=account)
         RuntimeLock.clean_stale(probe_config.runtime_lock_path)
     if args.set_project_alias:
-        config = AppConfig.from_workspace(workspace)
+        config = AppConfig.from_workspace(workspace, account=account)
         raise SystemExit(
             run_set_project_alias(
                 config,
@@ -957,11 +569,14 @@ def main() -> None:
             headless=args.headless,
             browser_mode=mcp_browser_mode,
             browser_profile=args.browser_profile,
+            account=account,
         ).model_copy(
             update={
                 "assistant_response_timeout_seconds": args.assistant_response_timeout_seconds,
                 "mcp_live_response_timeout_seconds": args.mcp_live_response_timeout_seconds,
-                "mcp_live_result_message_limit": args.mcp_live_result_message_limit,
+                "mcp_live_result_message_limit": _mcp_live_result_message_limit(args),
+                "mcp_token_frugal": args.mcp_token_frugal,
+                "mcp_prompt_warning_tokens": args.mcp_prompt_warning_tokens,
                 "mcp_default_conversation": args.mcp_default_conversation,
                 "mcp_default_project": args.mcp_default_project,
             }
@@ -980,11 +595,14 @@ def main() -> None:
             headless=args.headless,
             browser_mode=mcp_browser_mode,
             browser_profile=args.browser_profile,
+            account=account,
         ).model_copy(
             update={
                 "assistant_response_timeout_seconds": args.assistant_response_timeout_seconds,
                 "mcp_live_response_timeout_seconds": args.mcp_live_response_timeout_seconds,
-                "mcp_live_result_message_limit": args.mcp_live_result_message_limit,
+                "mcp_live_result_message_limit": _mcp_live_result_message_limit(args),
+                "mcp_token_frugal": args.mcp_token_frugal,
+                "mcp_prompt_warning_tokens": args.mcp_prompt_warning_tokens,
                 "mcp_default_conversation": args.mcp_default_conversation,
                 "mcp_default_project": args.mcp_default_project,
             }
@@ -997,6 +615,8 @@ def main() -> None:
             )
         )
     if args.project_doctor:
+        from chatalyst.core.runtime import RuntimeLockError
+
         config = AppConfig.from_workspace(
             workspace,
             offline=False,
@@ -1004,11 +624,14 @@ def main() -> None:
             headless=args.headless,
             browser_mode=browser_mode,
             browser_profile=args.browser_profile,
+            account=account,
         ).model_copy(
             update={
                 "assistant_response_timeout_seconds": args.assistant_response_timeout_seconds,
                 "mcp_live_response_timeout_seconds": args.mcp_live_response_timeout_seconds,
-                "mcp_live_result_message_limit": args.mcp_live_result_message_limit,
+                "mcp_live_result_message_limit": _mcp_live_result_message_limit(args),
+                "mcp_token_frugal": args.mcp_token_frugal,
+                "mcp_prompt_warning_tokens": args.mcp_prompt_warning_tokens,
                 "mcp_default_project": args.mcp_default_project,
             }
         )
@@ -1020,6 +643,8 @@ def main() -> None:
             print(exc)
             raise SystemExit(2) from exc
     if args.login:
+        from chatalyst.core.runtime import RuntimeLockError
+
         config = AppConfig.from_workspace(
             workspace,
             offline=False,
@@ -1027,11 +652,14 @@ def main() -> None:
             headless=False,
             browser_mode="visible",
             browser_profile=args.browser_profile,
+            account=account,
         ).model_copy(
             update={
                 "assistant_response_timeout_seconds": args.assistant_response_timeout_seconds,
                 "mcp_live_response_timeout_seconds": args.mcp_live_response_timeout_seconds,
-                "mcp_live_result_message_limit": args.mcp_live_result_message_limit,
+                "mcp_live_result_message_limit": _mcp_live_result_message_limit(args),
+                "mcp_token_frugal": args.mcp_token_frugal,
+                "mcp_prompt_warning_tokens": args.mcp_prompt_warning_tokens,
             }
         )
         try:
@@ -1040,6 +668,8 @@ def main() -> None:
             print(exc)
             raise SystemExit(2) from exc
     if args.mcp:
+        from chatalyst.core.mcp_server import ChatalystMCPServer, run_stdio
+
         mcp_browser_mode = browser_mode
         if not args.mcp_read_only and not args.headless and args.browser_mode == "auto":
             mcp_browser_mode = "provider"
@@ -1050,11 +680,14 @@ def main() -> None:
             headless=args.headless,
             browser_mode=mcp_browser_mode,
             browser_profile=args.browser_profile,
+            account=account,
         ).model_copy(
             update={
                 "assistant_response_timeout_seconds": args.assistant_response_timeout_seconds,
                 "mcp_live_response_timeout_seconds": args.mcp_live_response_timeout_seconds,
-                "mcp_live_result_message_limit": args.mcp_live_result_message_limit,
+                "mcp_live_result_message_limit": _mcp_live_result_message_limit(args),
+                "mcp_token_frugal": args.mcp_token_frugal,
+                "mcp_prompt_warning_tokens": args.mcp_prompt_warning_tokens,
                 "mcp_default_conversation": args.mcp_default_conversation,
                 "mcp_default_project": args.mcp_default_project,
             }
@@ -1072,14 +705,20 @@ def main() -> None:
         headless=args.headless,
         browser_mode=browser_mode,
         browser_profile=args.browser_profile,
+        account=account,
     ).model_copy(
         update={
             "assistant_response_timeout_seconds": args.assistant_response_timeout_seconds,
             "mcp_live_response_timeout_seconds": args.mcp_live_response_timeout_seconds,
-            "mcp_live_result_message_limit": args.mcp_live_result_message_limit,
+            "mcp_live_result_message_limit": _mcp_live_result_message_limit(args),
+            "mcp_token_frugal": args.mcp_token_frugal,
+            "mcp_prompt_warning_tokens": args.mcp_prompt_warning_tokens,
         }
     )
     try:
+        from chatalyst.core.runtime import RuntimeLockError
+        from chatalyst.tui_app import ChatGPTTUI
+
         ChatGPTTUI(config).run()
     except RuntimeLockError as exc:
         print(exc)

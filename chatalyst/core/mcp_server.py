@@ -7,29 +7,26 @@ import json
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from chatalyst.core.browser import BrowserController
-from chatalyst.core.cache import ChatCache
-from chatalyst.core.chatgpt import (
-    ChatGPTService,
-    ProjectSelectionError,
-    PromptSubmittedNoAssistantResponseError,
-)
-from chatalyst.core.config import AppConfig
-from chatalyst.core.export import ExportFormat, ExportService
-from chatalyst.core.models import Conversation, LoginState, Message
-from chatalyst.core.privacy import redact_project_refs
-from chatalyst.core.project_aliases import ProjectAliasResolver
-from chatalyst.core.runtime import RuntimeLock, RuntimeLockError
-from chatalyst.core.search import SearchEngine
-from chatalyst.core.snippets import SnippetService
 from chatalyst.core.version import package_version
 
 JsonObject = dict[str, Any]
 ToolHandler = Callable[[JsonObject], JsonObject | Awaitable[JsonObject]]
+DEFAULT_MCP_LIVE_RESULT_MESSAGE_LIMIT = 20
+FRUGAL_MCP_LIVE_RESULT_MESSAGE_LIMIT = 6
+
+if TYPE_CHECKING:
+    from chatalyst.core.browser import BrowserController
+    from chatalyst.core.chatgpt import ChatGPTService
+    from chatalyst.core.config import AppConfig
+    from chatalyst.core.export import ExportService
+    from chatalyst.core.models import Conversation, Message
+    from chatalyst.core.plugins import MCPToolRegistration
+    from chatalyst.core.search import SearchEngine
+    from chatalyst.core.snippets import SnippetService
 
 
 class MCPError(Exception):
@@ -53,20 +50,30 @@ class ChatalystMCPServer:
         read_only: bool = False,
         max_text_chars: int = 100_000,
     ) -> None:
+        from chatalyst.core.cache import ChatCache
+        from chatalyst.core.plugins import PluginContext, PluginRegistry
+        from chatalyst.core.project_aliases import ProjectAliasResolver
+
         self.config = config
         self.read_only = read_only
         self.max_text_chars = max_text_chars
         self.cache = ChatCache(self.config.database_path)
         self.cache.initialize()
-        self.search = SearchEngine(self.cache)
-        self.export = ExportService(self.cache, self.config.exports_dir)
-        self.snippets = SnippetService(cache=self.cache, snippets_dir=self.config.snippets_dir)
+        self.search: SearchEngine | None = None
+        self.export: ExportService | None = None
+        self.snippets: SnippetService | None = None
         self.project_aliases = ProjectAliasResolver(self.config)
+        self.plugins = PluginRegistry(audit_path=self.config.logs_dir / "plugin-audit.jsonl")
+        self.plugins.load_from_directory(self.config.plugins_dir)
+        self.plugin_context = PluginContext(config=self.config, cache=self.cache)
+        self._plugin_tools = self._load_plugin_tools()
+        self._tool_specs: tuple[JsonObject, ...] | None = None
         self.browser: BrowserController | None = None
         self.chatgpt: ChatGPTService | None = None
         self._tool_handlers: dict[str, ToolHandler] = {
             "chatalyst_health": self._tool_health,
             "chatalyst_get_scope": self._tool_get_scope,
+            "chatalyst_prompt_budget": self._tool_prompt_budget,
             "chatalyst_search": self._tool_search,
             "chatalyst_list_conversations": self._tool_list_conversations,
             "chatalyst_list_projects": self._tool_list_projects,
@@ -82,6 +89,10 @@ class ChatalystMCPServer:
                     "chatalyst_reply_to_conversation": self._tool_reply_to_conversation,
                 }
             )
+        for plugin_tool in self._plugin_tools:
+            if self.read_only and not plugin_tool.read_only:
+                continue
+            self._tool_handlers[plugin_tool.external_name] = self._plugin_handler(plugin_tool)
 
     async def close(self) -> None:
         try:
@@ -149,13 +160,15 @@ class ChatalystMCPServer:
         limit = self._limit(arguments.get("limit"), default=20, maximum=100)
         if not query:
             raise MCPError(-32602, "query must not be empty.")
-        results = self.search.search(query, limit=limit)
+        results = self._search_engine().search(query, limit=limit)
         return {
             "query": query,
             "results": [result.model_dump(mode="json") for result in results],
         }
 
     async def _tool_health(self, arguments: JsonObject) -> JsonObject:
+        from chatalyst.core.privacy import redact_project_refs
+
         check_browser = self._optional_bool(arguments, "check_browser", default=False)
         resolved_conversation = self._resolve_scoped_conversation(required=False)
         default_project = self.project_aliases.resolve(self.config.mcp_default_project)
@@ -167,11 +180,16 @@ class ChatalystMCPServer:
         payload: JsonObject = {
             "version": self._package_version(),
             "workspace": str(self.config.workspace),
+            "account": self.config.account,
+            "account_dir": str(self.config.account_dir) if self.config.account_dir else None,
             "database_path": str(self.config.database_path),
             "read_only": self.read_only,
             "offline": self.config.offline,
             "browser_mode": self.config.browser_mode.value,
             "browser_profile": self.config.browser_profile.value,
+            "token_frugal": self.config.mcp_token_frugal,
+            "prompt_warning_tokens": self.config.mcp_prompt_warning_tokens,
+            "live_result_message_limit": self.config.mcp_live_result_message_limit,
             "default_conversation": self.config.mcp_default_conversation,
             "default_project": self._display_project_reference(self.config.mcp_default_project),
             "resolved_conversation": (
@@ -185,6 +203,11 @@ class ChatalystMCPServer:
             ),
             "cache_counts": self._cache_counts(),
             "runtime_lock": self._runtime_lock_status(),
+            "plugins": {
+                "count": len(self.plugins.plugins),
+                "names": list(self.plugins.names),
+                "mcp_tools": [tool.external_name for tool in self._plugin_tools],
+            },
             "browser": {
                 "checked": False,
                 "state": self.browser.status.browser_state.value if self.browser else "not_started",
@@ -207,6 +230,7 @@ class ChatalystMCPServer:
         del arguments
         conversation = self._resolve_scoped_conversation(required=False)
         return {
+            "account": self.config.account,
             "default_conversation": self.config.mcp_default_conversation,
             "default_project": self._display_project_reference(self.config.mcp_default_project),
             "resolved_conversation": (
@@ -214,9 +238,13 @@ class ChatalystMCPServer:
             ),
         }
 
+    def _tool_prompt_budget(self, arguments: JsonObject) -> JsonObject:
+        prompt = self._require_bounded_str(arguments, "prompt", maximum=self.max_text_chars)
+        return self._prompt_budget(prompt)
+
     def _tool_list_conversations(self, arguments: JsonObject) -> JsonObject:
         limit = self._limit(arguments.get("limit"), default=50, maximum=250)
-        conversations = self.cache.list_conversations()[:limit]
+        conversations = self.cache.list_conversations(limit=limit)
         return {
             "conversations": [
                 conversation.model_dump(mode="json") for conversation in conversations
@@ -237,11 +265,10 @@ class ChatalystMCPServer:
         if conversation is None:
             raise MCPError(-32602, f"Conversation not found: {conversation_id}")
         include_messages = self._optional_bool(arguments, "include_messages", default=True)
-        all_messages = self.cache.list_messages(conversation_id)
-        message_count = len(all_messages)
+        message_count = self.cache.count_messages(conversation_id)
         messages: list[Message] = []
         if include_messages:
-            messages = self._bounded_messages(all_messages, arguments)
+            messages = self._message_window(conversation_id, arguments)
         notes = self.cache.list_notes(conversation_id)
         tags = self.cache.list_tags(conversation_id)
         stats = self.cache.conversation_stats(conversation_id)
@@ -266,6 +293,8 @@ class ChatalystMCPServer:
         }
 
     def _tool_export_conversation(self, arguments: JsonObject) -> JsonObject:
+        from chatalyst.core.export import ExportFormat
+
         self._require_write_enabled()
         conversation_id = self._require_bounded_str(arguments, "conversation_id", maximum=500)
         format_value = self._require_bounded_str(arguments, "format", maximum=20)
@@ -280,7 +309,7 @@ class ChatalystMCPServer:
                 isinstance(item, str) for item in selected_message_ids
             ):
                 raise MCPError(-32602, "selected_message_ids must be a list of strings.")
-        path = self.export.export_conversation(
+        path = self._export_service().export_conversation(
             conversation_id,
             export_format,
             selected_message_ids=selected_message_ids,
@@ -295,7 +324,7 @@ class ChatalystMCPServer:
         conversation_id = self._optional_str(arguments, "conversation_id")
         message_id = self._optional_str(arguments, "message_id")
         language = self._optional_str(arguments, "language")
-        snippet = self.snippets.stage_text(
+        snippet = self._snippet_service().stage_text(
             conversation_id=conversation_id,
             message_id=message_id,
             body=body,
@@ -304,6 +333,10 @@ class ChatalystMCPServer:
         return {"snippet": snippet.model_dump(mode="json")}
 
     async def _tool_send_new_message(self, arguments: JsonObject) -> JsonObject:
+        from chatalyst.core.chatgpt import ProjectSelectionError
+        from chatalyst.core.privacy import redact_project_refs
+        from chatalyst.core.runtime import RuntimeLock, RuntimeLockError
+
         self._require_write_enabled()
         prompt = self._require_bounded_str(arguments, "prompt", maximum=self.max_text_chars)
         if not prompt.strip():
@@ -345,6 +378,8 @@ class ChatalystMCPServer:
             raise MCPError(-32000, str(exc)) from exc
 
     async def _tool_reply_to_conversation(self, arguments: JsonObject) -> JsonObject:
+        from chatalyst.core.runtime import RuntimeLock, RuntimeLockError
+
         self._require_write_enabled()
         prompt = self._require_bounded_str(arguments, "prompt", maximum=self.max_text_chars)
         if not prompt.strip():
@@ -376,7 +411,9 @@ class ChatalystMCPServer:
         except RuntimeLockError as exc:
             raise MCPError(-32000, str(exc)) from exc
 
-    def _tools(self) -> list[JsonObject]:
+    def _tools(self) -> tuple[JsonObject, ...]:
+        if self._tool_specs is not None:
+            return self._tool_specs
         tools = [
             {
                 "name": "chatalyst_health",
@@ -403,6 +440,19 @@ class ChatalystMCPServer:
                 ),
                 "annotations": {"readOnlyHint": True},
                 "inputSchema": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "chatalyst_prompt_budget",
+                "description": (
+                    "Estimate local prompt size before using a live ChatGPT send/reply "
+                    "tool. This never opens the browser or sends content to ChatGPT."
+                ),
+                "annotations": {"readOnlyHint": True},
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["prompt"],
+                    "properties": {"prompt": {"type": "string"}},
+                },
             },
             {
                 "name": "chatalyst_search",
@@ -481,104 +531,140 @@ class ChatalystMCPServer:
                 },
             },
         ]
-        if self.read_only:
-            return tools
+        if not self.read_only:
+            tools.extend(
+                [
+                    {
+                        "name": "chatalyst_export_conversation",
+                        "description": (
+                            "Write a local export file for one cached Chatalyst "
+                            "conversation in Markdown, HTML, JSON, or TXT."
+                        ),
+                        "annotations": {"readOnlyHint": False, "destructiveHint": False},
+                        "inputSchema": {
+                            "type": "object",
+                            "required": ["conversation_id", "format"],
+                            "properties": {
+                                "conversation_id": {"type": "string"},
+                                "format": {
+                                    "type": "string",
+                                    "enum": ["markdown", "html", "json", "txt"],
+                                },
+                                "selected_message_ids": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                        },
+                    },
+                    {
+                        "name": "chatalyst_stage_snippet",
+                        "description": (
+                            "Stage text or code into Chatalyst's local snippet workspace "
+                            "for later user review. Does not execute terminal commands."
+                        ),
+                        "annotations": {"readOnlyHint": False, "destructiveHint": False},
+                        "inputSchema": {
+                            "type": "object",
+                            "required": ["body"],
+                            "properties": {
+                                "body": {"type": "string"},
+                                "language": {"type": "string"},
+                                "conversation_id": {"type": "string"},
+                                "message_id": {"type": "string"},
+                            },
+                        },
+                    },
+                    {
+                        "name": "chatalyst_send_new_message",
+                        "description": (
+                            "Create a new ChatGPT conversation through Chatalyst's "
+                            "authenticated browser provider, then send this prompt. "
+                            "Use this for fresh ChatGPT work, including research tasks, "
+                            "when a new conversation is appropriate. Uses the configured "
+                            "default project when one is set, unless project_name is "
+                            "provided."
+                        ),
+                        "annotations": {"readOnlyHint": False, "destructiveHint": False},
+                        "inputSchema": {
+                            "type": "object",
+                            "required": ["prompt"],
+                            "properties": {
+                                "prompt": {"type": "string"},
+                                "project_name": {"type": "string"},
+                                "wait_for_response_seconds": {
+                                    "type": "number",
+                                    "minimum": 5,
+                                    "maximum": 900,
+                                },
+                            },
+                        },
+                    },
+                    {
+                        "name": "chatalyst_reply_to_conversation",
+                        "description": (
+                            "Reply in an existing ChatGPT conversation through "
+                            "Chatalyst's authenticated browser provider. Use for "
+                            "conversation handoff, coordination with ChatGPT, or "
+                            "continuing research/work in a scoped existing thread. "
+                            "conversation_id is optional when launched with a default "
+                            "conversation or project scope."
+                        ),
+                        "annotations": {"readOnlyHint": False, "destructiveHint": False},
+                        "inputSchema": {
+                            "type": "object",
+                            "required": ["prompt"],
+                            "properties": {
+                                "conversation_id": {"type": "string"},
+                                "prompt": {"type": "string"},
+                                "wait_for_response_seconds": {
+                                    "type": "number",
+                                    "minimum": 5,
+                                    "maximum": 900,
+                                },
+                            },
+                        },
+                    },
+                ]
+            )
         tools.extend(
-            [
-                {
-                    "name": "chatalyst_export_conversation",
-                    "description": (
-                        "Write a local export file for one cached Chatalyst "
-                        "conversation in Markdown, HTML, JSON, or TXT."
-                    ),
-                    "annotations": {"readOnlyHint": False, "destructiveHint": False},
-                    "inputSchema": {
-                        "type": "object",
-                        "required": ["conversation_id", "format"],
-                        "properties": {
-                            "conversation_id": {"type": "string"},
-                            "format": {
-                                "type": "string",
-                                "enum": ["markdown", "html", "json", "txt"],
-                            },
-                            "selected_message_ids": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
-                        },
-                    },
-                },
-                {
-                    "name": "chatalyst_stage_snippet",
-                    "description": (
-                        "Stage text or code into Chatalyst's local snippet workspace "
-                        "for later user review. Does not execute terminal commands."
-                    ),
-                    "annotations": {"readOnlyHint": False, "destructiveHint": False},
-                    "inputSchema": {
-                        "type": "object",
-                        "required": ["body"],
-                        "properties": {
-                            "body": {"type": "string"},
-                            "language": {"type": "string"},
-                            "conversation_id": {"type": "string"},
-                            "message_id": {"type": "string"},
-                        },
-                    },
-                },
-                {
-                    "name": "chatalyst_send_new_message",
-                    "description": (
-                        "Create a new ChatGPT conversation through Chatalyst's "
-                        "authenticated browser provider, then send this prompt. "
-                        "Use this for fresh ChatGPT work, including research tasks, "
-                        "when a new conversation is appropriate. Uses the configured "
-                        "default project when one is set, unless project_name is "
-                        "provided."
-                    ),
-                    "annotations": {"readOnlyHint": False, "destructiveHint": False},
-                    "inputSchema": {
-                        "type": "object",
-                        "required": ["prompt"],
-                        "properties": {
-                            "prompt": {"type": "string"},
-                            "project_name": {"type": "string"},
-                            "wait_for_response_seconds": {
-                                "type": "number",
-                                "minimum": 5,
-                                "maximum": 900,
-                            },
-                        },
-                    },
-                },
-                {
-                    "name": "chatalyst_reply_to_conversation",
-                    "description": (
-                        "Reply in an existing ChatGPT conversation through "
-                        "Chatalyst's authenticated browser provider. Use for "
-                        "conversation handoff, coordination with ChatGPT, or "
-                        "continuing research/work in a scoped existing thread. "
-                        "conversation_id is optional when launched with a default "
-                        "conversation or project scope."
-                    ),
-                    "annotations": {"readOnlyHint": False, "destructiveHint": False},
-                    "inputSchema": {
-                        "type": "object",
-                        "required": ["prompt"],
-                        "properties": {
-                            "conversation_id": {"type": "string"},
-                            "prompt": {"type": "string"},
-                            "wait_for_response_seconds": {
-                                "type": "number",
-                                "minimum": 5,
-                                "maximum": 900,
-                            },
-                        },
-                    },
-                },
-            ]
+            tool.spec() for tool in self._plugin_tools if not self.read_only or tool.read_only
         )
-        return tools
+        self._tool_specs = tuple(tools)
+        return self._tool_specs
+
+    def _load_plugin_tools(self) -> tuple[MCPToolRegistration, ...]:
+        return self.plugins.mcp_tools(self.plugin_context)
+
+    def _plugin_handler(self, plugin_tool: MCPToolRegistration) -> ToolHandler:
+        async def _handler(arguments: JsonObject) -> JsonObject:
+            return await plugin_tool.call(self.plugin_context, arguments)
+
+        return _handler
+
+    def _export_service(self) -> ExportService:
+        from chatalyst.core.export import ExportService
+
+        if self.export is None:
+            self.export = ExportService(self.cache, self.config.exports_dir)
+        return self.export
+
+    def _snippet_service(self) -> SnippetService:
+        from chatalyst.core.snippets import SnippetService
+
+        if self.snippets is None:
+            self.snippets = SnippetService(
+                cache=self.cache,
+                snippets_dir=self.config.snippets_dir,
+            )
+        return self.snippets
+
+    def _search_engine(self) -> SearchEngine:
+        from chatalyst.core.search import SearchEngine
+
+        if self.search is None:
+            self.search = SearchEngine(self.cache)
+        return self.search
 
     def _text_result(self, payload: JsonObject) -> JsonObject:
         return {
@@ -713,23 +799,20 @@ class ChatalystMCPServer:
         direct = self.cache.get_conversation(reference)
         if direct is not None:
             return direct
-        normalized = reference.casefold()
-        conversations = self.cache.list_conversations(pinned_first=False)
-        exact_matches = [
-            conversation
-            for conversation in conversations
-            if conversation.title.casefold() == normalized
-            or (conversation.chat_identifier or "").casefold() == normalized
-            or (conversation.url or "").casefold() == normalized
-        ]
+        exact_matches = self.cache.find_conversation_references(
+            reference,
+            partial=False,
+            limit=2,
+        )
         if len(exact_matches) == 1:
             return exact_matches[0]
-        partial_matches = [
-            conversation
-            for conversation in conversations
-            if normalized in conversation.title.casefold()
-            or normalized in (conversation.url or "").casefold()
-        ]
+        partial_matches: list[Conversation] = []
+        if not exact_matches:
+            partial_matches = self.cache.find_conversation_references(
+                reference,
+                partial=True,
+                limit=2,
+            )
         if len(partial_matches) == 1:
             return partial_matches[0]
         if len(exact_matches) + len(partial_matches) > 1:
@@ -742,14 +825,7 @@ class ChatalystMCPServer:
         return None
 
     def _find_recent_project_conversation(self, project_name: str) -> Conversation | None:
-        normalized = project_name.strip().casefold()
-        for conversation in self.cache.list_conversations(pinned_first=False):
-            if (conversation.project_name or "").casefold() == normalized:
-                return conversation
-        for conversation in self.cache.list_conversations(pinned_first=False):
-            if normalized in (conversation.project_name or "").casefold():
-                return conversation
-        return None
+        return self.cache.find_recent_project_conversation(project_name.strip())
 
     def _bounded_messages(
         self,
@@ -767,6 +843,41 @@ class ChatalystMCPServer:
             return messages[offset : offset + limit]
         return messages[-limit:]
 
+    def _message_window(self, conversation_id: str, arguments: JsonObject) -> list[Message]:
+        limit = self._limit(arguments.get("limit"), default=50, maximum=500)
+        offset = self._optional_nonnegative_int(arguments, "offset")
+        before_ordinal = self._optional_nonnegative_int(arguments, "before_ordinal")
+        if offset is not None and before_ordinal is not None:
+            raise MCPError(-32602, "offset and before_ordinal cannot be combined.")
+        if before_ordinal is None and offset is None:
+            return self.cache.list_recent_messages(conversation_id, limit=limit)
+        messages = self.cache.list_messages(conversation_id)
+        if before_ordinal is not None:
+            return [message for message in messages if message.ordinal < before_ordinal][-limit:]
+        if offset is not None:
+            return messages[offset : offset + limit]
+        return messages[-limit:]
+
+    def _prompt_budget(self, prompt: str) -> JsonObject:
+        characters = len(prompt)
+        words = len(prompt.split())
+        approximate_tokens = max(1, (characters + 3) // 4) if prompt else 0
+        threshold = max(1, self.config.mcp_prompt_warning_tokens)
+        over_warning = approximate_tokens >= threshold
+        suggested_action = "send"
+        if over_warning:
+            suggested_action = "summarize_or_stage_context_first"
+        return {
+            "characters": characters,
+            "words": words,
+            "approximate_tokens": approximate_tokens,
+            "warning_threshold_tokens": threshold,
+            "over_warning_threshold": over_warning,
+            "token_frugal": self.config.mcp_token_frugal,
+            "max_text_chars": self.max_text_chars,
+            "suggested_action": suggested_action,
+        }
+
     def _cache_counts(self) -> JsonObject:
         tables = ("projects", "conversations", "messages", "notes", "tags", "bookmarks")
         counts: JsonObject = {}
@@ -776,6 +887,8 @@ class ChatalystMCPServer:
         return counts
 
     def _runtime_lock_status(self) -> JsonObject:
+        from chatalyst.core.runtime import RuntimeLock
+
         status = RuntimeLock.status(self.config.runtime_lock_path)
         return {
             "path": str(status.path),
@@ -794,6 +907,10 @@ class ChatalystMCPServer:
             raise MCPError(-32601, "This MCP server was started in read-only mode.")
 
     async def _live_chatgpt(self) -> ChatGPTService:
+        from chatalyst.core.browser import BrowserController
+        from chatalyst.core.chatgpt import ChatGPTService
+        from chatalyst.core.models import LoginState
+
         if self.config.offline:
             raise MCPError(-32000, "Live ChatGPT tools require full MCP mode.")
         if self.browser is None:
@@ -825,11 +942,14 @@ class ChatalystMCPServer:
     ) -> JsonObject:
         if self.chatgpt is None:
             raise MCPError(-32603, "ChatGPT service is unavailable.")
+        prompt_budget = self._prompt_budget(prompt)
         streamed: list[Message] = []
         send_kwargs: JsonObject = {"response_timeout_seconds": wait_seconds}
         if project_name is not None:
             send_kwargs["project_name"] = project_name
         try:
+            from chatalyst.core.chatgpt import PromptSubmittedNoAssistantResponseError
+
             async for message in self.chatgpt.send_message(prompt, **send_kwargs):
                 streamed.append(message)
         except PromptSubmittedNoAssistantResponseError as exc:
@@ -846,6 +966,7 @@ class ChatalystMCPServer:
                 "messages_truncated": message_count > len(messages),
                 "streamed_message_count": len(streamed),
                 "wait_for_response_seconds": wait_seconds,
+                "prompt_budget": prompt_budget,
             }
         final_message = streamed[-1] if streamed else None
         conversation = (
@@ -866,15 +987,15 @@ class ChatalystMCPServer:
             "messages_truncated": message_count > len(messages),
             "streamed_message_count": len(streamed),
             "wait_for_response_seconds": wait_seconds,
+            "prompt_budget": prompt_budget,
         }
 
     def _live_result_messages(self, conversation_id: str) -> tuple[list[Message], int]:
-        messages = self.cache.list_messages(conversation_id)
-        message_count = len(messages)
+        message_count = self.cache.count_messages(conversation_id)
         limit = max(0, self.config.mcp_live_result_message_limit)
         if limit == 0:
             return [], message_count
-        return messages[-limit:], message_count
+        return self.cache.list_recent_messages(conversation_id, limit=limit), message_count
 
     async def _park_browser(self) -> None:
         if self.browser is not None:
@@ -888,13 +1009,15 @@ async def _run_stdio_async(
 ) -> int:
     try:
         while True:
-            line = await _read_stdin_line()
+            close_after_response = False
+            line = await _read_stdin_line(max_chars=max_request_bytes + 1)
             if line == "":
                 break
             if not line.strip():
                 continue
             try:
                 if len(line.encode("utf-8")) > max_request_bytes:
+                    close_after_response = True
                     raise MCPError(-32600, "JSON-RPC request exceeds maximum size.")
                 request = json.loads(line)
                 if not isinstance(request, dict):
@@ -915,13 +1038,17 @@ async def _run_stdio_async(
             if response is not None:
                 sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
                 sys.stdout.flush()
+            if close_after_response:
+                break
     finally:
         await server.close()
     return 0
 
 
-async def _read_stdin_line() -> str:
-    return await asyncio.to_thread(sys.stdin.readline)
+async def _read_stdin_line(*, max_chars: int | None = None) -> str:
+    if max_chars is None:
+        return await asyncio.to_thread(sys.stdin.readline)
+    return await asyncio.to_thread(sys.stdin.readline, max_chars)
 
 
 def run_stdio(server: ChatalystMCPServer, *, max_request_bytes: int = 1_000_000) -> int:
@@ -944,6 +1071,13 @@ def main() -> None:
         type=Path,
         default=Path.cwd(),
         help="Chatalyst workspace containing storage/, exports/, and work/.",
+    )
+    parser.add_argument(
+        "--account",
+        help=(
+            "Use an isolated account under workspace/accounts/ACCOUNT. Each account "
+            "has its own Chromium profile, SQLite vault, plugins, logs, and exports."
+        ),
     )
     parser.add_argument(
         "--read-only",
@@ -997,8 +1131,22 @@ def main() -> None:
     parser.add_argument(
         "--mcp-live-result-message-limit",
         type=int,
-        default=20,
+        default=None,
         help="Recent messages returned by live send/reply tools; full history remains cached.",
+    )
+    parser.add_argument(
+        "--mcp-token-frugal",
+        action="store_true",
+        help=(
+            "Reduce default live MCP result payloads and report prompt-size budgeting "
+            "metadata for agents."
+        ),
+    )
+    parser.add_argument(
+        "--mcp-prompt-warning-tokens",
+        type=int,
+        default=4_000,
+        help="Approximate prompt-token threshold reported by MCP prompt budgeting.",
     )
     parser.add_argument(
         "--mcp-default-conversation",
@@ -1015,18 +1163,36 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    from chatalyst.core.config import AppConfig, validate_account_name
+
     browser_mode = "headless" if args.headless else args.browser_mode
+    try:
+        account = validate_account_name(args.account)
+    except ValueError as exc:
+        parser.error(str(exc))
+    live_result_message_limit = (
+        int(args.mcp_live_result_message_limit)
+        if args.mcp_live_result_message_limit is not None
+        else (
+            FRUGAL_MCP_LIVE_RESULT_MESSAGE_LIMIT
+            if args.mcp_token_frugal
+            else DEFAULT_MCP_LIVE_RESULT_MESSAGE_LIMIT
+        )
+    )
     config = AppConfig.from_workspace(
         args.workspace,
         offline=args.read_only,
         headless=args.headless,
         browser_mode=browser_mode,
         browser_profile=args.browser_profile,
+        account=account,
     ).model_copy(
         update={
             "assistant_response_timeout_seconds": args.assistant_response_timeout_seconds,
             "mcp_live_response_timeout_seconds": args.mcp_live_response_timeout_seconds,
-            "mcp_live_result_message_limit": args.mcp_live_result_message_limit,
+            "mcp_live_result_message_limit": live_result_message_limit,
+            "mcp_token_frugal": args.mcp_token_frugal,
+            "mcp_prompt_warning_tokens": args.mcp_prompt_warning_tokens,
             "mcp_default_conversation": args.mcp_default_conversation,
             "mcp_default_project": args.mcp_default_project,
         }

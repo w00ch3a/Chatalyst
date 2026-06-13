@@ -11,6 +11,12 @@ from chatalyst.core.config import AppConfig, BrowserMode, BrowserProfile
 from chatalyst.core.events import EventSink, EventType, NullEventSink, WorkspaceEvent
 from chatalyst.core.models import BrowserSessionStatus, BrowserState, LoginState
 
+CHATGPT_DOCUMENT_HOSTS = (
+    "chatgpt.com",
+    "chat.openai.com",
+    "openai.com",
+)
+
 
 class BrowserUnavailableError(RuntimeError):
     pass
@@ -68,20 +74,23 @@ class BrowserOptimizationPolicy:
                 "/beacon",
                 "sentry.io",
             ),
-            allowed_document_hosts=(),
+            allowed_document_hosts=CHATGPT_DOCUMENT_HOSTS,
             extra_args=(
                 "--disable-background-networking",
                 "--disable-background-timer-throttling",
                 "--disable-backgrounding-occluded-windows",
                 "--disable-breakpad",
                 "--disable-client-side-phishing-detection",
+                "--disable-component-extensions-with-background-pages",
                 "--disable-component-update",
                 "--disable-default-apps",
                 "--disable-domain-reliability",
                 "--disable-extensions",
-                "--disable-features=AutofillServerCommunication,CalculateNativeWinOcclusion,"
-                "InterestFeedContentSuggestions,MediaRouter,OptimizationHints,Translate",
+                "--disable-features=AutofillServerCommunication,BackForwardCache,"
+                "CalculateNativeWinOcclusion,InterestFeedContentSuggestions,MediaRouter,"
+                "OptimizationHints,Translate",
                 "--disable-hang-monitor",
+                "--disable-logging",
                 "--disable-notifications",
                 "--disable-popup-blocking",
                 "--disable-prompt-on-repost",
@@ -89,10 +98,14 @@ class BrowserOptimizationPolicy:
                 "--disable-search-engine-choice-screen",
                 "--disable-sync",
                 "--disable-translate",
+                "--log-level=3",
                 "--metrics-recording-only",
                 "--mute-audio",
                 "--no-default-browser-check",
                 "--no-first-run",
+                "--no-pings",
+                "--process-per-site",
+                "--renderer-process-limit=2",
             ),
         )
 
@@ -116,30 +129,27 @@ class BrowserOptimizationPolicy:
                 "fullstory",
                 "hotjar",
             ),
-            allowed_document_hosts=(
-                "chatgpt.com",
-                "chat.openai.com",
-                "auth.openai.com",
-                "auth0.openai.com",
-            ),
+            allowed_document_hosts=CHATGPT_DOCUMENT_HOSTS,
             extra_args=(
                 "--disable-background-networking",
                 "--disable-background-timer-throttling",
                 "--disable-backgrounding-occluded-windows",
                 "--disable-breakpad",
                 "--disable-client-side-phishing-detection",
+                "--disable-component-extensions-with-background-pages",
                 "--disable-component-update",
                 "--disable-default-apps",
                 "--disable-features=AudioServiceOutOfProcess,AutofillServerCommunication,"
-                "CalculateNativeWinOcclusion,InterestFeedContentSuggestions,MediaRouter,"
-                "OptimizationHints,PaintHolding,Prerender2,SpeculationRulesPrefetchProxy,"
-                "Translate",
+                "BackForwardCache,CalculateNativeWinOcclusion,InterestFeedContentSuggestions,"
+                "MediaRouter,OptimizationHints,PaintHolding,Prerender2,"
+                "SpeculationRulesPrefetchProxy,Translate",
                 "--disable-ipc-flooding-protection",
                 "--disable-dev-shm-usage",
                 "--disable-domain-reliability",
                 "--disable-extensions",
                 "--disable-gpu",
                 "--disable-hang-monitor",
+                "--disable-logging",
                 "--disable-notifications",
                 "--disable-popup-blocking",
                 "--disable-prompt-on-repost",
@@ -149,12 +159,14 @@ class BrowserOptimizationPolicy:
                 "--disable-sync",
                 "--disable-translate",
                 "--hide-scrollbars",
+                "--log-level=3",
                 "--metrics-recording-only",
                 "--mute-audio",
                 "--no-default-browser-check",
                 "--no-first-run",
                 "--no-pings",
                 "--process-per-site",
+                "--renderer-process-limit=2",
             ),
         )
 

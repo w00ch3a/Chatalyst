@@ -521,7 +521,10 @@ class ChatGPTService:
         project_url = self._project_url_from_reference(normalized)
         if project_url:
             await page.goto(project_url, wait_until="domcontentloaded")
-            await self._wait_for_any(page, self.selectors.composer)
+            if self._is_chatgpt_app_reference(project_url):
+                await self._open_chatgpt_app(page)
+            else:
+                await self._wait_for_any(page, self.selectors.composer)
             return
         await self._wait_for_any(page, self.selectors.project_labels)
         escaped = re.escape(normalized)
@@ -544,6 +547,59 @@ class ChatGPTService:
         except PlaywrightTimeoutError:
             pass
         await self._wait_for_any(page, self.selectors.composer)
+
+    async def _open_chatgpt_app(self, page: Page) -> None:
+        if await self._any_visible(page, self.selectors.composer):
+            return
+        launched = await page.evaluate(
+            """
+            () => {
+                const launchLabels = [
+                    'start chat',
+                    'start',
+                    'chat now',
+                    'open chat',
+                    'open in chatgpt',
+                    'use app',
+                    'try it',
+                    'continue',
+                    'launch'
+                ];
+                const nodes = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+                const candidates = nodes.map((node) => {
+                    const rawText = node.innerText
+                        || node.textContent
+                        || node.getAttribute('aria-label')
+                        || '';
+                    const text = rawText
+                        .replace(/\\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                    const href = (node.href || node.getAttribute('href') || '').toLowerCase();
+                    return { node, text, href };
+                });
+                const exact = candidates.find((item) => launchLabels.includes(item.text));
+                const partial = candidates.find((item) =>
+                    launchLabels.some((label) => item.text.includes(label))
+                    || item.href.includes('/g/')
+                    || item.href.includes('/c/')
+                );
+                const target = exact || partial;
+                if (!target) return false;
+                target.node.click();
+                return true;
+            }
+            """
+        )
+        if launched:
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=5_000)
+            except PlaywrightTimeoutError:
+                pass
+        await self._wait_for_any(page, self.selectors.composer)
+
+    def _is_chatgpt_app_reference(self, reference: str) -> bool:
+        return reference.startswith(("https://chatgpt.com/apps/", "https://chat.openai.com/apps/"))
 
     async def verify_project_scope(self, project_name: str) -> ProjectScopeState:
         page = await self.browser.start()
@@ -869,11 +925,15 @@ class ChatGPTService:
         match = re.search(r"/g/([^/?#]+)", reference)
         if match:
             return match.group(1)
+        if self._is_chatgpt_app_reference(reference):
+            return self._hash_id(reference)
         if re.fullmatch(r"[A-Za-z0-9_-]{8,}", reference):
             return reference
         return None
 
     def _project_url_from_reference(self, reference: str) -> str | None:
+        if self._is_chatgpt_app_reference(reference):
+            return reference
         project_id = self._project_id_from_reference(reference)
         if project_id is None:
             return None

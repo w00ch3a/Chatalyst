@@ -29,6 +29,17 @@ class FakeProjectPage:
         return self.project_visible
 
 
+class FakeAppLandingPage(FakeProjectPage):
+    app_launcher_clicked = False
+
+    async def evaluate(self, script, _arg=None):
+        if "launchLabels" in script:
+            self.app_launcher_clicked = True
+            self.url = "https://chatgpt.com/c/scispace-chat"
+            return True
+        return await super().evaluate(script, _arg)
+
+
 class FakeProjectBrowser:
     def __init__(self, page: FakeProjectPage) -> None:
         self.page = page
@@ -101,6 +112,66 @@ async def test_project_scoped_new_chat_accepts_project_url_reference(tmp_path):
     assert page.url == "https://chatgpt.com/g/project-alpha"
     assert conversation.project_id == "project-alpha"
     assert conversation.project_name == "https://chatgpt.com/g/project-alpha"
+
+
+@pytest.mark.asyncio
+async def test_project_scoped_new_chat_accepts_chatgpt_app_url_reference(tmp_path):
+    config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
+    cache = ChatCache(config.database_path)
+    cache.initialize()
+    page = FakeProjectPage()
+    service = ChatGPTService(config, FakeProjectBrowser(page), cache)  # type: ignore[arg-type]
+    clicked_new_chat = False
+
+    async def click_new_chat(_page, _selector_group):
+        nonlocal clicked_new_chat
+        clicked_new_chat = True
+        return True
+
+    async def wait_for_composer(_page, _selector_group):
+        return None
+
+    service._click_first = click_new_chat  # type: ignore[method-assign]
+    service._wait_for_any = wait_for_composer  # type: ignore[method-assign]
+    try:
+        conversation = await service.new_chat(project_name="https://chatgpt.com/apps/scispace")
+    finally:
+        cache.close()
+
+    assert clicked_new_chat is False
+    assert page.url == "https://chatgpt.com/apps/scispace"
+    assert conversation.project_id == service._hash_id("https://chatgpt.com/apps/scispace")  # noqa: SLF001
+    assert conversation.project_name == "https://chatgpt.com/apps/scispace"
+
+
+@pytest.mark.asyncio
+async def test_project_scoped_new_chat_launches_chatgpt_app_landing_page(tmp_path):
+    config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
+    cache = ChatCache(config.database_path)
+    cache.initialize()
+    page = FakeAppLandingPage()
+    service = ChatGPTService(config, FakeProjectBrowser(page), cache)  # type: ignore[arg-type]
+    composer_checks = 0
+
+    async def any_visible(_page, _selector_group):
+        nonlocal composer_checks
+        composer_checks += 1
+        return composer_checks > 1
+
+    async def wait_for_composer(_page, _selector_group):
+        return None
+
+    service._any_visible = any_visible  # type: ignore[method-assign]
+    service._wait_for_any = wait_for_composer  # type: ignore[method-assign]
+    try:
+        conversation = await service.new_chat(project_name="https://chatgpt.com/apps/scispace")
+    finally:
+        cache.close()
+
+    assert page.app_launcher_clicked is True
+    assert page.url == "https://chatgpt.com/c/scispace-chat"
+    assert conversation.project_id == service._hash_id("https://chatgpt.com/apps/scispace")  # noqa: SLF001
+    assert conversation.project_name == "https://chatgpt.com/apps/scispace"
 
 
 @pytest.mark.asyncio

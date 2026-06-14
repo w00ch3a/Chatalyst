@@ -105,6 +105,9 @@ more of the visible ChatGPT DOM for MCP/SSH workloads. Chatalyst intentionally
 does not use
 `--single-process`; it is unstable for persistent authenticated Chromium
 sessions.
+Use the `standard` browser profile for ChatGPT App landing pages such as
+`https://chatgpt.com/apps/...`; some app launch pages rely on UI/CSS that
+`ultralight` intentionally removes.
 
 For SSH use, log in once on the host with a visible browser, then run:
 
@@ -226,11 +229,12 @@ MCP tool choice:
   shape for the task.
 
 When `--mcp-default-project` is set, `chatalyst_send_new_message` first opens
-that ChatGPT project before creating the new chat. The value can be a visible
-project name, a ChatGPT `/g/...` project URL, or a project id. A tool call can
-also provide `project_name` to override the configured project for that one
-request. If the project cannot be opened, Chatalyst returns an MCP error instead
-of silently creating an unscoped chat.
+that ChatGPT project or app before creating the new chat. The value can be a
+visible project name, a ChatGPT `/g/...` project URL, a ChatGPT `/apps/...` app
+URL, or a project id. A tool call can also provide `project_name` to override
+the configured project/app for that one request. If the project or app cannot be
+opened, Chatalyst returns an MCP error instead of silently creating an unscoped
+chat.
 
 For private projects, prefer local aliases:
 

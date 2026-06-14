@@ -31,9 +31,12 @@ class FakeProjectPage:
 
 class FakeAppLandingPage(FakeProjectPage):
     app_launcher_clicked = False
+    required_launch_label: str | None = None
 
     async def evaluate(self, script, _arg=None):
         if "launchLabels" in script:
+            if self.required_launch_label and self.required_launch_label not in script.lower():
+                return False
             self.app_launcher_clicked = True
             self.url = "https://chatgpt.com/c/scispace-chat"
             return True
@@ -172,6 +175,33 @@ async def test_project_scoped_new_chat_launches_chatgpt_app_landing_page(tmp_pat
     assert page.url == "https://chatgpt.com/c/scispace-chat"
     assert conversation.project_id == service._hash_id("https://chatgpt.com/apps/scispace")  # noqa: SLF001
     assert conversation.project_name == "https://chatgpt.com/apps/scispace"
+
+
+@pytest.mark.asyncio
+async def test_project_scoped_new_chat_launches_app_with_ask_label(tmp_path):
+    config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
+    cache = ChatCache(config.database_path)
+    cache.initialize()
+    page = FakeAppLandingPage()
+    page.required_launch_label = "ask"
+    service = ChatGPTService(config, FakeProjectBrowser(page), cache)  # type: ignore[arg-type]
+
+    async def any_visible(_page, _selector_group):
+        return False
+
+    async def wait_for_composer(_page, _selector_group):
+        return None
+
+    service._any_visible = any_visible  # type: ignore[method-assign]
+    service._wait_for_any = wait_for_composer  # type: ignore[method-assign]
+    try:
+        conversation = await service.new_chat(project_name="https://chatgpt.com/apps/scispace")
+    finally:
+        cache.close()
+
+    assert page.app_launcher_clicked is True
+    assert page.url == "https://chatgpt.com/c/scispace-chat"
+    assert conversation.project_id == service._hash_id("https://chatgpt.com/apps/scispace")  # noqa: SLF001
 
 
 @pytest.mark.asyncio
@@ -409,6 +439,34 @@ async def test_project_scope_marks_cache_only_match_as_uncertain(tmp_path):
 
     assert scope.verified is False
     assert scope.reason == "cache_match_only"
+
+
+@pytest.mark.asyncio
+async def test_project_scope_verifies_chatgpt_app_url_by_cached_conversation(tmp_path):
+    config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
+    cache = ChatCache(config.database_path)
+    cache.initialize()
+    app_url = "https://chatgpt.com/apps/scispace"
+    page = FakeProjectPage()
+    page.url = "https://chatgpt.com/c/chat-1"
+    page.project_visible = False
+    service = ChatGPTService(config, FakeProjectBrowser(page), cache)  # type: ignore[arg-type]
+    cache.upsert_conversation(
+        Conversation(
+            id="chat-1",
+            title="SciSpace Chat",
+            project_id=service._hash_id(app_url),  # noqa: SLF001
+            project_name=app_url,
+            sync_status=SyncStatus.CACHED,
+        )
+    )
+    try:
+        scope = await service.verify_project_scope(app_url)
+    finally:
+        cache.close()
+
+    assert scope.verified is True
+    assert scope.reason == "app_conversation_and_cache_match"
 
 
 class FailingLocator:

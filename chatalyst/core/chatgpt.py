@@ -555,11 +555,17 @@ class ChatGPTService:
             """
             () => {
                 const launchLabels = [
+                    'ask',
+                    'ask now',
                     'start chat',
+                    'start chatting',
                     'start',
                     'chat now',
+                    'get started',
+                    'message',
                     'open chat',
                     'open in chatgpt',
+                    'talk to',
                     'use app',
                     'try it',
                     'continue',
@@ -570,6 +576,8 @@ class ChatGPTService:
                     const rawText = node.innerText
                         || node.textContent
                         || node.getAttribute('aria-label')
+                        || node.getAttribute('title')
+                        || node.getAttribute('data-testid')
                         || '';
                     const text = rawText
                         .replace(/\\s+/g, ' ')
@@ -600,6 +608,9 @@ class ChatGPTService:
 
     def _is_chatgpt_app_reference(self, reference: str) -> bool:
         return reference.startswith(("https://chatgpt.com/apps/", "https://chat.openai.com/apps/"))
+
+    def _is_chatgpt_conversation_reference(self, reference: str) -> bool:
+        return reference.startswith(("https://chatgpt.com/c/", "https://chat.openai.com/c/"))
 
     async def verify_project_scope(self, project_name: str) -> ProjectScopeState:
         page = await self.browser.start()
@@ -649,6 +660,20 @@ class ChatGPTService:
                 requested_project=normalized,
                 verified=True,
                 reason="visible_or_url_project_and_cache_match",
+                url=page.url,
+            )
+        if (
+            self._is_chatgpt_app_reference(normalized)
+            and cached_match
+            and (
+                self._is_chatgpt_app_reference(page.url or "")
+                or self._is_chatgpt_conversation_reference(page.url or "")
+            )
+        ):
+            return ProjectScopeState(
+                requested_project=normalized,
+                verified=True,
+                reason="app_conversation_and_cache_match",
                 url=page.url,
             )
         if url_match:

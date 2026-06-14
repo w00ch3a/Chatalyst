@@ -31,4 +31,5 @@
 - CLI doctor, project-doctor, smoke, stale-lock repair, and version checks for
   local and remote installs.
 - Project-scoped MCP sends can target visible project names, ChatGPT `/g/...`
-  project URLs, or project ids.
+  project URLs, ChatGPT `/apps/...` app URLs, or project ids, with app launcher
+  handling and app-specific scope verification.

@@ -124,7 +124,7 @@ The same split-row rule applies when launching `chatalyst-mcp` directly:
     "--browser-mode",
     "provider",
     "--browser-profile",
-    "ultralight",
+    "standard",
     "--mcp-token-frugal",
     "--mcp-default-project",
     "Research",
@@ -163,6 +163,11 @@ For read-only local automation, add `--read-only` to `chatalyst-mcp` or
 `--mcp-read-only` to `chatalyst --mcp`. Read-only mode exposes vault inspection
 tools without exports, staged snippets, or live ChatGPT sends.
 
+Use `--browser-profile standard` when launching ChatGPT Apps through
+`https://chatgpt.com/apps/...` or `https://chat.openai.com/apps/...`.
+`ultralight` is still useful for plain cached-chat/reply loops, but it can strip
+styles and controls needed by app landing pages.
+
 For long-running agent loops, add `--mcp-token-frugal`. It lowers the default
 live result message window from 20 to 6 unless you explicitly pass
 `--mcp-live-result-message-limit`, and live send/reply responses include
@@ -197,8 +202,9 @@ registration decisions are recorded in `logs/plugin-audit.jsonl`, or
 ## Project Scope Proof
 
 When `--mcp-default-project` is set, or when a `project_name` argument is passed,
-`chatalyst_send_new_message` opens that ChatGPT project before sending. The value
-can be a visible project name, a ChatGPT `/g/...` project URL, or a project id.
+`chatalyst_send_new_message` opens that ChatGPT project or app before sending.
+The value can be a visible project name, a ChatGPT `/g/...` project URL, a
+ChatGPT `/apps/...` app URL, or a project id.
 The tool response includes a `scope` object with:
 
 - `requested_project`

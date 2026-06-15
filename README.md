@@ -6,6 +6,13 @@ real authenticated Chromium session through Playwright, then stores a local
 SQLite productivity cache for offline browsing, search, notes, bookmarks, tags,
 exports, and future plugins.
 
+## Release 0.2.0
+
+This release adds ChatGPT App URL support, account-scoped workspaces,
+token-frugal MCP mode, private project aliases, plugin permission hardening,
+bounded MCP/SQLite payloads, and broader release diagnostics. See
+[CHANGELOG.md](CHANGELOG.md) for the full release notes.
+
 ## Install
 
 Chatalyst runs on any local macOS or Linux machine that can run Python, `uv`,
@@ -73,7 +80,8 @@ counts, installed command paths, and MCP tool schema when `--mcp` is included.
 `--smoke` exercises MCP initialize, tools/list, and health without opening
 ChatGPT.
 `--project-doctor` opens ChatGPT and reports visible projects plus whether a
-configured project name, `/g/...` URL, or project id can be opened.
+configured project name, `/g/...` project URL, `/apps/...` app URL, or project
+id can be opened.
 `--set-project-alias` writes a private local alias to
 `config/project_aliases.json`, which is ignored by Git. Use aliases such as
 `work` or `research` in MCP/TUI config instead of putting private project URLs in

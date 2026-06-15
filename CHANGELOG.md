@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.0 - 2026-06-15
+
+- Added ChatGPT App URL support for `https://chatgpt.com/apps/...` and
+  `https://chat.openai.com/apps/...`, including app launcher handling and
+  app-specific scope verification after launch into a conversation.
+- Added account-scoped workspaces with isolated Chromium profiles, SQLite
+  vaults, project aliases, plugins, logs, exports, runtime locks, and snippets.
+- Added private project aliases and redaction helpers so MCP clients can use
+  local aliases instead of storing private project URLs in source-controlled
+  configuration.
+- Added project discovery diagnostics and selector diagnostic packs for safer
+  recovery when ChatGPT UI structure changes.
+- Added token-frugal MCP mode, prompt budgeting metadata, bounded stdio reads,
+  and bounded SQLite reads for recent conversations/messages.
+- Hardened plugin loading with explicit permissions, disabled plugin support,
+  audit logging, duplicate identity rejection, and duplicate MCP tool rejection.
+- Split the lightweight CLI entry point from the Textual TUI to reduce startup
+  imports for version checks, smoke checks, and MCP mode.
+- Tightened browser resource policy with ChatGPT/OpenAI document host
+  restrictions and Chromium background-service reductions.
+- Added Apache-2.0 licensing with attribution notice.
+- Expanded automated coverage for accounts, browser policy, MCP behavior,
+  plugin safety, privacy redaction, and ChatGPT App flows.
+
 ## 0.1.0
 
 - Terminal-first ChatGPT knowledge workspace using a real authenticated
@@ -10,26 +34,5 @@
 - Provider browser mode, ultralight browser profile, project-scoped MCP sends,
   project scope diagnostics, selector diagnostic packs, and runtime lock status.
 - Local plugin manifest loader for trusted workspace plugins.
-- Account-scoped workspaces with isolated Chromium profiles, SQLite vaults,
-  project aliases, plugins, logs, exports, runtime locks, and snippets.
-- Advanced plugin manifests with explicit permissions, disabled plugin support,
-  audit logging, and namespaced plugin-contributed MCP tools.
-- Plugin-contributed MCP tools reject duplicate external tool names so one
-  plugin cannot silently overwrite another plugin's handler.
-- Plugin loading rejects duplicate normalized plugin identities before hooks run.
-- Leaner MCP startup and repeated tool listing by deferring write-only services,
-  lazily importing browser/search/export/TUI dependencies, caching the MCP tool
-  schema, and avoiding duplicate project conversation scans.
-- MCP result paths now use bounded SQLite reads for recent conversations and
-  messages, and token-frugal mode adds prompt budgeting plus tighter default
-  live result payloads for agent loops.
-- MCP stdio reads are bounded before allocation and oversized requests return
-  one protocol error before the session closes.
-- Browser resource policy now restricts document navigation to ChatGPT/OpenAI
-  auth hosts and applies tighter Chromium background, logging, extension, and
-  renderer-process limits.
 - CLI doctor, project-doctor, smoke, stale-lock repair, and version checks for
   local and remote installs.
-- Project-scoped MCP sends can target visible project names, ChatGPT `/g/...`
-  project URLs, ChatGPT `/apps/...` app URLs, or project ids, with app launcher
-  handling and app-specific scope verification.

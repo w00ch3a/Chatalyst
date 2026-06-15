@@ -8,6 +8,10 @@ def test_redact_project_reference_hides_project_urls_and_ids():
         redact_project_reference("https://chatgpt.com/g/private-project-id")
         == "https://chatgpt.com/g/[redacted]"
     )
+    assert (
+        redact_project_reference("https://chatgpt.com/apps/private-app-id")
+        == "https://chatgpt.com/apps/[redacted]"
+    )
     assert redact_project_reference("g-private-project-id") == "[redacted-project-id]"
 
 

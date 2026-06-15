@@ -38,7 +38,7 @@ class FakeAppLandingPage(FakeProjectPage):
             if self.required_launch_label and self.required_launch_label not in script.lower():
                 return False
             self.app_launcher_clicked = True
-            self.url = "https://chatgpt.com/c/scispace-chat"
+            self.url = "https://chatgpt.com/c/generic-app-chat"
             return True
         return await super().evaluate(script, _arg)
 
@@ -137,14 +137,14 @@ async def test_project_scoped_new_chat_accepts_chatgpt_app_url_reference(tmp_pat
     service._click_first = click_new_chat  # type: ignore[method-assign]
     service._wait_for_any = wait_for_composer  # type: ignore[method-assign]
     try:
-        conversation = await service.new_chat(project_name="https://chatgpt.com/apps/scispace")
+        conversation = await service.new_chat(project_name="https://chatgpt.com/apps/generic-app")
     finally:
         cache.close()
 
     assert clicked_new_chat is False
-    assert page.url == "https://chatgpt.com/apps/scispace"
-    assert conversation.project_id == service._hash_id("https://chatgpt.com/apps/scispace")  # noqa: SLF001
-    assert conversation.project_name == "https://chatgpt.com/apps/scispace"
+    assert page.url == "https://chatgpt.com/apps/generic-app"
+    assert conversation.project_id == service._hash_id("https://chatgpt.com/apps/generic-app")  # noqa: SLF001
+    assert conversation.project_name == "https://chatgpt.com/apps/generic-app"
 
 
 @pytest.mark.asyncio
@@ -167,14 +167,14 @@ async def test_project_scoped_new_chat_launches_chatgpt_app_landing_page(tmp_pat
     service._any_visible = any_visible  # type: ignore[method-assign]
     service._wait_for_any = wait_for_composer  # type: ignore[method-assign]
     try:
-        conversation = await service.new_chat(project_name="https://chatgpt.com/apps/scispace")
+        conversation = await service.new_chat(project_name="https://chatgpt.com/apps/generic-app")
     finally:
         cache.close()
 
     assert page.app_launcher_clicked is True
-    assert page.url == "https://chatgpt.com/c/scispace-chat"
-    assert conversation.project_id == service._hash_id("https://chatgpt.com/apps/scispace")  # noqa: SLF001
-    assert conversation.project_name == "https://chatgpt.com/apps/scispace"
+    assert page.url == "https://chatgpt.com/c/generic-app-chat"
+    assert conversation.project_id == service._hash_id("https://chatgpt.com/apps/generic-app")  # noqa: SLF001
+    assert conversation.project_name == "https://chatgpt.com/apps/generic-app"
 
 
 @pytest.mark.asyncio
@@ -195,13 +195,13 @@ async def test_project_scoped_new_chat_launches_app_with_ask_label(tmp_path):
     service._any_visible = any_visible  # type: ignore[method-assign]
     service._wait_for_any = wait_for_composer  # type: ignore[method-assign]
     try:
-        conversation = await service.new_chat(project_name="https://chatgpt.com/apps/scispace")
+        conversation = await service.new_chat(project_name="https://chatgpt.com/apps/generic-app")
     finally:
         cache.close()
 
     assert page.app_launcher_clicked is True
-    assert page.url == "https://chatgpt.com/c/scispace-chat"
-    assert conversation.project_id == service._hash_id("https://chatgpt.com/apps/scispace")  # noqa: SLF001
+    assert page.url == "https://chatgpt.com/c/generic-app-chat"
+    assert conversation.project_id == service._hash_id("https://chatgpt.com/apps/generic-app")  # noqa: SLF001
 
 
 @pytest.mark.asyncio
@@ -446,7 +446,7 @@ async def test_project_scope_verifies_chatgpt_app_url_by_cached_conversation(tmp
     config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
     cache = ChatCache(config.database_path)
     cache.initialize()
-    app_url = "https://chatgpt.com/apps/scispace"
+    app_url = "https://chatgpt.com/apps/generic-app"
     page = FakeProjectPage()
     page.url = "https://chatgpt.com/c/chat-1"
     page.project_visible = False
@@ -454,7 +454,7 @@ async def test_project_scope_verifies_chatgpt_app_url_by_cached_conversation(tmp
     cache.upsert_conversation(
         Conversation(
             id="chat-1",
-            title="SciSpace Chat",
+            title="Generic App Chat",
             project_id=service._hash_id(app_url),  # noqa: SLF001
             project_name=app_url,
             sync_status=SyncStatus.CACHED,

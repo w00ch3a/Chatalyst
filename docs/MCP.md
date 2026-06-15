@@ -142,6 +142,20 @@ oversized request.
 
 Private project aliases:
 
+```bash
+uv run chatalyst --workspace /home/user/.local/share/chatalyst \
+  --set-project-alias research "https://chatgpt.com/g/g-canonical-gpt-id"
+```
+
+Aliases can also map stale ChatGPT App URLs to canonical GPT routes while
+keeping private identifiers out of source-controlled MCP config:
+
+```bash
+uv run chatalyst --workspace /home/user/.local/share/chatalyst \
+  --set-project-alias "https://chatgpt.com/apps/old-app-slug" \
+  "https://chatgpt.com/g/g-canonical-gpt-id"
+```
+
 ```json
 {
   "command": "/home/user/.local/bin/chatalyst-mcp",

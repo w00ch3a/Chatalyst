@@ -251,6 +251,15 @@ uv run chatalyst --workspace /path/to/workspace \
   --set-project-alias research "https://chatgpt.com/g/..."
 ```
 
+Aliases can also repair stale ChatGPT App links without committing private app
+or GPT identifiers to the repository:
+
+```bash
+uv run chatalyst --workspace /path/to/workspace \
+  --set-project-alias "https://chatgpt.com/apps/old-app-slug" \
+  "https://chatgpt.com/g/g-canonical-gpt-id"
+```
+
 Then configure MCP with:
 
 ```json

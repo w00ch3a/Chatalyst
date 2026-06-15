@@ -13,7 +13,7 @@ def test_chatalyst_version_flag_reports_package_version():
         text=True,
     )
 
-    assert result.stdout.strip() == "chatalyst 0.2.0"
+    assert result.stdout.strip() == "chatalyst 0.2.1"
     assert result.stderr == ""
 
 
@@ -25,7 +25,7 @@ def test_chatalyst_mcp_version_flag_reports_package_version():
         text=True,
     )
 
-    assert result.stdout.strip() == "chatalyst-mcp 0.2.0"
+    assert result.stdout.strip() == "chatalyst-mcp 0.2.1"
     assert result.stderr == ""
 
 

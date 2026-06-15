@@ -32,6 +32,7 @@ from chatalyst.core.models import (
     SyncStatus,
     utc_now,
 )
+from chatalyst.core.project_aliases import ProjectAliasResolver
 from chatalyst.core.selectors import SelectorCatalog, SelectorDiagnostic, SelectorGroup
 
 
@@ -87,6 +88,7 @@ class ChatGPTService:
         self.selectors = selectors or SelectorCatalog()
         self.events = events or NullEventSink()
         self.pruning_policy = pruning_policy or BrowserDisplayPruningPolicy.from_config(config)
+        self.project_aliases = ProjectAliasResolver(config)
 
     async def status(self) -> BrowserSessionStatus:
         if self.config.offline:
@@ -947,6 +949,7 @@ class ChatGPTService:
         return self._hash_id(url or "local-project")
 
     def _project_id_from_reference(self, reference: str) -> str | None:
+        reference = self._resolve_project_reference(reference)
         match = re.search(r"/g/([^/?#]+)", reference)
         if match:
             return match.group(1)
@@ -957,6 +960,7 @@ class ChatGPTService:
         return None
 
     def _project_url_from_reference(self, reference: str) -> str | None:
+        reference = self._resolve_project_reference(reference)
         if self._is_chatgpt_app_reference(reference):
             return reference
         project_id = self._project_id_from_reference(reference)
@@ -965,6 +969,10 @@ class ChatGPTService:
         if reference.startswith(("https://chatgpt.com/g/", "https://chat.openai.com/g/")):
             return reference
         return f"{self.config.chatgpt_url.rstrip('/')}/g/{project_id}"
+
+    def _resolve_project_reference(self, reference: str) -> str:
+        resolved = self.project_aliases.resolve(reference)
+        return resolved.resolved if resolved is not None else reference
 
     def _message_id(self, conversation_id: str, role: MessageRole, text: str, ordinal: int) -> str:
         return self._hash_id(f"{conversation_id}:{role.value}:{ordinal}:{text[:256]}")

@@ -148,6 +148,33 @@ async def test_project_scoped_new_chat_accepts_chatgpt_app_url_reference(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_project_scoped_new_chat_uses_private_app_url_alias(tmp_path):
+    config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
+    config.ensure_runtime_dirs()
+    config.project_aliases_path.write_text(
+        '{"https://chatgpt.com/apps/generic-app": "https://chatgpt.com/g/g-generic-app"}',
+        encoding="utf-8",
+    )
+    cache = ChatCache(config.database_path)
+    cache.initialize()
+    page = FakeProjectPage()
+    service = ChatGPTService(config, FakeProjectBrowser(page), cache)  # type: ignore[arg-type]
+
+    async def wait_for_composer(_page, _selector_group):
+        return None
+
+    service._wait_for_any = wait_for_composer  # type: ignore[method-assign]
+    try:
+        conversation = await service.new_chat(project_name="https://chatgpt.com/apps/generic-app")
+    finally:
+        cache.close()
+
+    assert page.url == "https://chatgpt.com/g/g-generic-app"
+    assert conversation.project_id == "g-generic-app"
+    assert conversation.project_name == "https://chatgpt.com/apps/generic-app"
+
+
+@pytest.mark.asyncio
 async def test_project_scoped_new_chat_launches_chatgpt_app_landing_page(tmp_path):
     config = AppConfig.from_workspace(tmp_path, browser_mode="provider")
     cache = ChatCache(config.database_path)

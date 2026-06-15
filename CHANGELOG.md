@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 - 2026-06-15
+
+- Added generic private alias resolution inside the ChatGPT browser service, so
+  stale ChatGPT App URLs can be mapped to canonical GPT/project URLs without
+  hardcoding app-specific routes in source.
+- Documented the private alias repair pattern for `/apps/...` to `/g/...`
+  compatibility redirects.
+
 ## 0.2.0 - 2026-06-15
 
 - Added ChatGPT App URL support for `https://chatgpt.com/apps/...` and

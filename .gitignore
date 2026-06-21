@@ -30,6 +30,7 @@ __pycache__/
 *.token
 secrets/
 config/
+plugins/*/plugin_config.json
 
 # Personal ChatGPT browser profile and auth state
 profile/

@@ -32,6 +32,42 @@ def create_plugin():
     assert registry.names == ("sample",)
 
 
+def test_plugin_registry_loads_dataclass_plugin(tmp_path):
+    plugin_dir = tmp_path / "plugins" / "dataclass_plugin"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "dataclass_plugin",
+                "module": "plugin.py",
+                "factory": "create_plugin",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (plugin_dir / "plugin.py").write_text(
+        """
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class DataclassPlugin:
+    name: str = "dataclass_plugin"
+    description: str = "Dataclass plugin"
+
+def create_plugin():
+    return DataclassPlugin()
+""",
+        encoding="utf-8",
+    )
+
+    registry = PluginRegistry()
+    registry.load_from_directory(tmp_path / "plugins")
+
+    assert registry.names == ("dataclass_plugin",)
+
+
 def test_plugin_registry_rejects_manifest_outside_plugin_folder(tmp_path):
     plugin_dir = tmp_path / "plugins" / "bad"
     plugin_dir.mkdir(parents=True)

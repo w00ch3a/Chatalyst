@@ -19,11 +19,16 @@ runtime lock.
 Log in once with a visible browser on the same machine:
 
 ```bash
+git clone https://github.com/w00ch3a/Chatalyst.git
+cd Chatalyst
 uv sync
 uv run playwright install chromium
 uv run chatalyst --login
 uv run chatalyst --account personal --login
 ```
+
+For an existing local checkout, run `git pull --ff-only` before `uv sync` when
+updating to a new release.
 
 After login, run MCP mode from the project directory:
 
@@ -210,8 +215,16 @@ chatalyst_plugin_<plugin-name>_<tool-name>
 
 Read-only MCP mode only exposes read-only plugin tools. Plugin load and tool
 registration decisions are recorded in `logs/plugin-audit.jsonl`, or
-`accounts/<account>/logs/plugin-audit.jsonl` when `--account` is used. See
-`docs/Plugins.md` for the plugin manifest and handler contract.
+`accounts/<account>/logs/plugin-audit.jsonl` when `--account` is used.
+
+The bundled `obsidian_vault` plugin adds:
+
+- `chatalyst_plugin_obsidian_vault_status`
+- `chatalyst_plugin_obsidian_vault_capture_request`
+
+It can also automatically capture cached user messages that contain configured
+requirement markers such as `athena-visual-qa-gate`. See `docs/Plugins.md` for
+the plugin manifest, handler contract, and Obsidian setup.
 
 ## Project Scope Proof
 

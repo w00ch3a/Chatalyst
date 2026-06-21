@@ -324,6 +324,129 @@ def create_plugin():
 
 
 @pytest.mark.asyncio
+async def test_mcp_live_send_emits_message_cached_plugin_hook(tmp_path):
+    config = AppConfig.from_workspace(tmp_path)
+    plugin_dir = config.plugins_dir / "hookwatch"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "hookwatch",
+                "version": "0.1.0",
+                "module": "plugin.py",
+                "factory": "create_plugin",
+                "permissions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (plugin_dir / "plugin.py").write_text(
+        """
+class HookWatchPlugin:
+    name = "hookwatch"
+    description = "Hook watcher"
+
+    def on_message_cached(self, context, message):
+        path = context.config.workspace / "hookwatch.txt"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{message.role.value}:{message.markdown}\\n")
+
+def create_plugin():
+    return HookWatchPlugin()
+""",
+        encoding="utf-8",
+    )
+    server = ChatalystMCPServer(config)
+    conversation = Conversation(id="chat-1", title="Hook Test", sync_status=SyncStatus.CACHED)
+
+    class HookChatGPT:
+        async def new_chat(self, *, project_name=None):
+            server.cache.upsert_conversation(conversation)
+            server.cache.upsert_message(
+                Message(
+                    id="old-1",
+                    conversation_id=conversation.id,
+                    role=MessageRole.USER,
+                    markdown="previous cached message",
+                    ordinal=0,
+                )
+            )
+            return conversation
+
+        async def send_message(self, prompt, *, response_timeout_seconds=None, project_name=None):
+            user = Message(
+                id="user-1",
+                conversation_id=conversation.id,
+                role=MessageRole.USER,
+                markdown=prompt,
+                ordinal=1,
+            )
+            assistant = Message(
+                id="assistant-1",
+                conversation_id=conversation.id,
+                role=MessageRole.ASSISTANT,
+                markdown="ok",
+                ordinal=2,
+            )
+            server.cache.upsert_message(user)
+            server.cache.upsert_message(assistant)
+            yield assistant
+
+    chatgpt = HookChatGPT()
+
+    async def live_chatgpt():
+        server.chatgpt = chatgpt  # type: ignore[assignment]
+        return chatgpt
+
+    async def park_browser():
+        return None
+
+    server._live_chatgpt = live_chatgpt  # type: ignore[method-assign]
+    server._park_browser = park_browser  # type: ignore[method-assign]
+    try:
+        payload = await server._tool_send_new_message(
+            {"prompt": "Run athena-visual-qa-gate"}
+        )
+        hook_log = (tmp_path / "hookwatch.txt").read_text(encoding="utf-8")
+    finally:
+        server.cache.close()
+
+    assert payload["final_message"]["markdown"] == "ok"
+    assert "previous cached message" not in hook_log
+    assert "user:Run athena-visual-qa-gate" in hook_log
+    assert "assistant:ok" in hook_log
+
+
+@pytest.mark.asyncio
+async def test_mcp_send_payload_handles_no_final_message(tmp_path):
+    server = _server(tmp_path)
+
+    class QuietChatGPT:
+        async def send_message(self, prompt, *, response_timeout_seconds=None, project_name=None):
+            if False:
+                yield Message(
+                    id="never",
+                    conversation_id="never",
+                    role=MessageRole.ASSISTANT,
+                    markdown=prompt,
+                )
+
+    server.chatgpt = QuietChatGPT()  # type: ignore[assignment]
+    try:
+        payload = await server._send_prompt_and_payload(  # noqa: SLF001
+            "hello",
+            wait_seconds=5,
+        )
+    finally:
+        server.cache.close()
+
+    assert payload["conversation"] is None
+    assert payload["final_message"] is None
+    assert payload["messages"] == []
+    assert payload["messages_returned"] == 0
+
+
+@pytest.mark.asyncio
 async def test_mcp_health_reports_scope_and_cache_counts(tmp_path):
     server = _server(tmp_path)
     conversation = Conversation(

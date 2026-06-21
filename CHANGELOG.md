@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 - 2026-06-21
+
+- Added a bundled trusted-local Obsidian Vault plugin that captures
+  requirement-bearing requests such as `athena-visual-qa-gate` into a configured
+  Obsidian vault.
+- MCP live send/reply now emits cached-message plugin hooks so plugins can
+  observe requirement-bearing prompts from automation lanes.
+- Updated install documentation to include cloning the GitHub repository before
+  running `uv sync`.
+
 ## 0.2.4 - 2026-06-21
 
 - Removed runtime lock owner marker files when releasing the browser lane so

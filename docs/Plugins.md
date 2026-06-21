@@ -30,6 +30,54 @@ accounts/
 This keeps separate OpenAI/ChatGPT accounts from sharing plugin state or plugin
 configuration by accident.
 
+## Bundled Obsidian Vault Plugin
+
+Chatalyst ships with a trusted local plugin at:
+
+```text
+plugins/obsidian_vault/
+```
+
+When the MCP server is running from a cloned repo, that plugin is available from
+the repo workspace. When running an installed tool against another workspace,
+copy the folder into that workspace:
+
+```bash
+mkdir -p /path/to/chatalyst-workspace/plugins
+cp -R /path/to/Chatalyst/plugins/obsidian_vault \
+  /path/to/chatalyst-workspace/plugins/
+```
+
+Configure the target vault with environment variables:
+
+```bash
+export CHATALYST_OBSIDIAN_VAULT="$HOME/Documents/Obsidian/My Vault"
+export CHATALYST_OBSIDIAN_FOLDER="Chatalyst/Requirements"
+export CHATALYST_OBSIDIAN_REQUIREMENTS="athena-visual-qa-gate"
+uv run chatalyst --mcp
+```
+
+`CHATALYST_OBSIDIAN_REQUIREMENTS` is a comma-separated list. A cached user
+message that contains any configured marker is captured as a Markdown note with
+YAML front matter. Assistant messages are ignored by the automatic hook.
+
+The plugin also exposes MCP tools:
+
+- `chatalyst_plugin_obsidian_vault_status`: reports whether the vault path is
+  configured and writable.
+- `chatalyst_plugin_obsidian_vault_capture_request`: writes a supplied request
+  body to the configured vault folder.
+
+Optional local config can be stored in:
+
+```text
+plugins/obsidian_vault/plugin_config.json
+```
+
+That file is ignored by Git. Do not commit private vault paths, project names,
+or requirement routing config. Use
+`plugins/obsidian_vault/plugin_config.example.json` as the template.
+
 ## Manifest
 
 `plugin.json`:

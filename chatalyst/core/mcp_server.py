@@ -952,6 +952,7 @@ class ChatalystMCPServer:
             raise MCPError(-32603, "ChatGPT service is unavailable.")
         prompt_budget = self._prompt_budget(prompt)
         streamed: list[Message] = []
+        existing_message_ids = self._cached_message_ids()
         send_kwargs: JsonObject = {"response_timeout_seconds": wait_seconds}
         if project_name is not None:
             send_kwargs["project_name"] = project_name
@@ -963,6 +964,7 @@ class ChatalystMCPServer:
         except PromptSubmittedNoAssistantResponseError as exc:
             conversation = self.cache.get_conversation(exc.conversation_id)
             messages, message_count = self._live_result_messages(exc.conversation_id)
+            self._emit_message_cached_hooks(messages, existing_message_ids=existing_message_ids)
             return {
                 "status": "submitted_no_response",
                 "reason": str(exc),
@@ -986,6 +988,7 @@ class ChatalystMCPServer:
         message_count = 0
         if conversation is not None:
             messages, message_count = self._live_result_messages(conversation.id)
+        self._emit_message_cached_hooks(messages, existing_message_ids=existing_message_ids)
         return {
             "conversation": conversation.model_dump(mode="json") if conversation else None,
             "final_message": final_message.model_dump(mode="json") if final_message else None,
@@ -997,6 +1000,26 @@ class ChatalystMCPServer:
             "wait_for_response_seconds": wait_seconds,
             "prompt_budget": prompt_budget,
         }
+
+    def _cached_message_ids(self) -> set[str]:
+        rows = self.cache.connection.execute("SELECT id FROM messages").fetchall()
+        return {str(row["id"]) for row in rows}
+
+    def _emit_message_cached_hooks(
+        self,
+        messages: list[Message],
+        *,
+        existing_message_ids: set[str],
+    ) -> None:
+        seen: set[str] = set()
+        for message in messages:
+            if message.id in existing_message_ids or message.id in seen:
+                continue
+            seen.add(message.id)
+            try:
+                self.plugins.message_cached(self.plugin_context, message)
+            except Exception:
+                logger.exception("Plugin message-cached hook failed")
 
     def _live_tool_failure(self, exc: Exception) -> MCPError:
         from chatalyst.core.privacy import redact_project_refs

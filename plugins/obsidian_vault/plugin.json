@@ -1,0 +1,9 @@
+{
+  "name": "obsidian_vault",
+  "version": "0.1.0",
+  "description": "Capture requirement-bearing Chatalyst requests into a local Obsidian vault.",
+  "module": "plugin.py",
+  "factory": "create_plugin",
+  "enabled": true,
+  "permissions": ["vault.write", "mcp.tools"]
+}

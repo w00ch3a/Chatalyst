@@ -6,11 +6,12 @@ real authenticated Chromium session through Playwright, then stores a local
 SQLite productivity cache for offline browsing, search, notes, bookmarks, tags,
 exports, and future plugins.
 
-## Release 0.2.0
+## Release 0.3.0
 
-This release adds ChatGPT App URL support, account-scoped workspaces,
-token-frugal MCP mode, private project aliases, plugin permission hardening,
-bounded MCP/SQLite payloads, and broader release diagnostics. See
+This release adds the bundled Obsidian Vault plugin, plugin hook delivery from
+MCP live ChatGPT sends/replies, ChatGPT App URL support, account-scoped
+workspaces, token-frugal MCP mode, private project aliases, plugin permission
+hardening, bounded MCP/SQLite payloads, and broader release diagnostics. See
 [CHANGELOG.md](CHANGELOG.md) for the full release notes.
 
 ## Install
@@ -20,9 +21,19 @@ and Playwright Chromium. It does not require a Raspberry Pi or appliance-style
 host.
 
 ```bash
+git clone https://github.com/w00ch3a/Chatalyst.git
+cd Chatalyst
 uv sync
 uv run playwright install chromium
 uv run chatalyst
+```
+
+For an existing checkout:
+
+```bash
+cd Chatalyst
+git pull --ff-only
+uv sync
 ```
 
 First login opens ChatGPT in Chromium. Log in manually through the real browser.
@@ -178,8 +189,23 @@ Plugins live in `plugins/` for legacy single-workspace installs, or in
 registration decisions are written to `logs/plugin-audit.jsonl` with owner-only
 file permissions.
 
-See [docs/Plugins.md](docs/Plugins.md) for the local plugin manifest format and
-a minimal plugin skeleton.
+The bundled Obsidian Vault plugin can capture requirement-bearing requests such
+as `athena-visual-qa-gate` into a local Obsidian vault:
+
+```bash
+export CHATALYST_OBSIDIAN_VAULT="$HOME/Documents/Obsidian/My Vault"
+export CHATALYST_OBSIDIAN_FOLDER="Chatalyst/Requirements"
+export CHATALYST_OBSIDIAN_REQUIREMENTS="athena-visual-qa-gate"
+uv run chatalyst --mcp
+```
+
+When running from a cloned repo, the bundled plugin is already under
+`plugins/obsidian_vault`. For an installed workspace outside the repo, copy that
+folder into the workspace `plugins/` directory. Do not commit vault paths or
+plugin runtime config; `plugins/*/plugin_config.json` is ignored.
+
+See [docs/Plugins.md](docs/Plugins.md) for the Obsidian setup, local plugin
+manifest format, and a minimal plugin skeleton.
 
 ## MCP Server
 

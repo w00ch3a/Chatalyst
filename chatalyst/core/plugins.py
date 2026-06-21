@@ -4,6 +4,7 @@ import importlib.util
 import inspect
 import json
 import re
+import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -217,6 +218,7 @@ class PluginRegistry:
                 self._audit("plugin_rejected", manifest_path, manifest=manifest, reason="no_loader")
                 return
             module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
             spec.loader.exec_module(module)
             factory = getattr(module, manifest.factory, None)
             if factory is None:

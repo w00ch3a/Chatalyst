@@ -60,6 +60,40 @@ def test_projects_are_listed_with_urls(tmp_path):
     assert projects[0].url == "https://chatgpt.com/g/a"
 
 
+def test_message_upsert_deduplicates_visible_turn_identity(tmp_path):
+    cache = ChatCache(tmp_path / "chat_cache.db")
+    cache.initialize()
+    conversation = Conversation(id="chat-1", title="Chat", sync_status=SyncStatus.CACHED)
+    cache.upsert_conversation(conversation)
+    try:
+        cache.upsert_message(
+            Message(
+                id="first-generated-id",
+                conversation_id=conversation.id,
+                role=MessageRole.ASSISTANT,
+                markdown="streaming text",
+                ordinal=1,
+            )
+        )
+        cache.upsert_message(
+            Message(
+                id="second-generated-id",
+                conversation_id=conversation.id,
+                role=MessageRole.ASSISTANT,
+                markdown="final text",
+                ordinal=1,
+            )
+        )
+        messages = cache.list_messages(conversation.id)
+    finally:
+        cache.close()
+
+    assert len(messages) == 1
+    assert messages[0].id == "first-generated-id"
+    assert messages[0].markdown == "final text"
+    assert messages[0].ordinal == 1
+
+
 def test_conversation_and_message_reads_can_be_bounded_in_sql(tmp_path):
     cache = ChatCache(tmp_path / "chat_cache.db")
     cache.initialize()

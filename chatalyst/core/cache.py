@@ -380,6 +380,16 @@ class ChatCache:
         self.reindex_conversation(conversation_id)
 
     def upsert_message(self, message: Message) -> None:
+        existing = self.connection.execute(
+            """
+            SELECT id FROM messages
+            WHERE conversation_id = ? AND role = ? AND ordinal = ?
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (message.conversation_id, message.role.value, message.ordinal),
+        ).fetchone()
+        message_id = str(existing["id"]) if existing is not None else message.id
         self.connection.execute(
             """
             INSERT INTO messages (
@@ -396,7 +406,7 @@ class ChatCache:
                 code_blocks_json = excluded.code_blocks_json
             """,
             (
-                message.id,
+                message_id,
                 message.conversation_id,
                 message.role.value,
                 message.markdown,

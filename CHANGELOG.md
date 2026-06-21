@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3 - 2026-06-21
+
+- Deduplicated cached ChatGPT message turns by visible conversation, role, and
+  ordinal so reopening a conversation cannot add duplicate rows for the same
+  assistant turn when generated DOM IDs differ.
+
 ## 0.2.2 - 2026-06-21
 
 - Converted live ChatGPT MCP browser failures into controlled MCP tool errors

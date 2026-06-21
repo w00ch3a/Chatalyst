@@ -376,6 +376,10 @@ class ChatalystMCPServer:
             raise MCPError(-32000, str(exc)) from exc
         except ProjectSelectionError as exc:
             raise MCPError(-32000, str(exc)) from exc
+        except MCPError:
+            raise
+        except Exception as exc:
+            raise self._live_tool_failure(exc) from exc
 
     async def _tool_reply_to_conversation(self, arguments: JsonObject) -> JsonObject:
         from chatalyst.core.runtime import RuntimeLock, RuntimeLockError
@@ -410,6 +414,10 @@ class ChatalystMCPServer:
                     await self._park_browser()
         except RuntimeLockError as exc:
             raise MCPError(-32000, str(exc)) from exc
+        except MCPError:
+            raise
+        except Exception as exc:
+            raise self._live_tool_failure(exc) from exc
 
     def _tools(self) -> tuple[JsonObject, ...]:
         if self._tool_specs is not None:
@@ -989,6 +997,26 @@ class ChatalystMCPServer:
             "wait_for_response_seconds": wait_seconds,
             "prompt_budget": prompt_budget,
         }
+
+    def _live_tool_failure(self, exc: Exception) -> MCPError:
+        from chatalyst.core.privacy import redact_project_refs
+
+        raw_reason = str(exc).strip() or exc.__class__.__name__
+        reason = redact_project_refs(raw_reason).replace(str(Path.home()), "~")
+        if len(reason) > 1_000:
+            reason = f"{reason[:1_000]}..."
+        message = (
+            "Live ChatGPT browser operation failed "
+            f"({exc.__class__.__name__}): {reason}. "
+            f"browser_mode={self.config.browser_mode.value}; "
+            f"browser_profile={self.config.browser_profile.value}."
+        )
+        if self.config.browser_profile.value == "ultralight":
+            message += (
+                " If this involves a ChatGPT project/app page, retry with "
+                "--browser-profile standard."
+            )
+        return MCPError(-32000, message)
 
     def _live_result_messages(self, conversation_id: str) -> tuple[list[Message], int]:
         message_count = self.cache.count_messages(conversation_id)

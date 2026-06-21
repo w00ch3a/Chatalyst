@@ -7,4 +7,4 @@ def package_version() -> str:
     try:
         return version("chatalyst")
     except PackageNotFoundError:
-        return "0.2.1"
+        return "0.2.2"

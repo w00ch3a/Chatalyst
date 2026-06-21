@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2 - 2026-06-21
+
+- Converted live ChatGPT MCP browser failures into controlled MCP tool errors
+  instead of opaque JSON-RPC internal errors.
+- Added sanitized diagnostics for live send/reply failures, including browser
+  mode/profile and a standard-profile hint when running ultralight.
+
 ## 0.2.1 - 2026-06-15
 
 - Added generic private alias resolution inside the ChatGPT browser service, so

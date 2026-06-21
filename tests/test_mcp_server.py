@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from chatalyst.core.chatgpt import PromptSubmittedNoAssistantResponseError
-from chatalyst.core.config import AppConfig
+from chatalyst.core.config import AppConfig, BrowserProfile
 from chatalyst.core.mcp_server import (
     ChatalystMCPServer,
     MCPError,
@@ -468,6 +469,54 @@ async def test_mcp_internal_errors_are_sanitized(tmp_path):
     assert response["error"]["code"] == -32603
     assert response["error"]["message"] == "Internal error."
     assert str(tmp_path) not in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_live_send_failures_return_controlled_tool_error(tmp_path):
+    server = _server(tmp_path)
+    server.config = server.config.model_copy(
+        update={"browser_profile": BrowserProfile.ULTRALIGHT}
+    )
+
+    class FailingChatGPT:
+        async def new_chat(self, *, project_name=None):
+            raise RuntimeError(
+                f"selector failed in {Path.home()}/private "
+                "https://chatgpt.com/apps/private-app"
+            )
+
+    async def live_chatgpt():
+        server.chatgpt = FailingChatGPT()  # type: ignore[assignment]
+        return server.chatgpt
+
+    async def park_browser():
+        return None
+
+    server._live_chatgpt = live_chatgpt  # type: ignore[method-assign]
+    server._park_browser = park_browser  # type: ignore[method-assign]
+    try:
+        response = await server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "chatalyst_send_new_message",
+                    "arguments": {"prompt": "hello"},
+                },
+            }
+        )
+    finally:
+        server.cache.close()
+
+    assert response is not None
+    assert response["error"]["code"] == -32000
+    assert "Live ChatGPT browser operation failed (RuntimeError)" in response["error"]["message"]
+    assert "browser_profile=ultralight" in response["error"]["message"]
+    assert "--browser-profile standard" in response["error"]["message"]
+    assert str(Path.home()) not in response["error"]["message"]
+    assert "private-app" not in response["error"]["message"]
+    assert "https://chatgpt.com/apps/[redacted]" in response["error"]["message"]
 
 
 @pytest.mark.asyncio

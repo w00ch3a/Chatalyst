@@ -87,10 +87,15 @@ class RuntimeLock:
 
     def release(self) -> None:
         if self._owned and self._fd is not None:
-            fcntl.flock(self._fd, fcntl.LOCK_UN)
-            os.close(self._fd)
-            self._fd = None
-            self._owned = False
+            fd = self._fd
+            try:
+                os.ftruncate(fd, 0)
+                os.fsync(fd)
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+                self._fd = None
+                self._owned = False
 
     def __enter__(self) -> RuntimeLock:
         return self.acquire()

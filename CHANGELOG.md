@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.4 - 2026-06-21
+
+- Removed runtime lock owner marker files when releasing the browser lane so
+  completed MCP live calls do not leave stale lock warnings behind.
+
 ## 0.2.3 - 2026-06-21
 
 - Deduplicated cached ChatGPT message turns by visible conversation, role, and

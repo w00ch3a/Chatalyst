@@ -58,6 +58,21 @@ def test_runtime_lock_status_reports_active_owner(tmp_path):
     assert status.locked is True
 
 
+def test_runtime_lock_release_clears_owner_marker(tmp_path):
+    lock_path = tmp_path / "runtime.lock"
+    lock = RuntimeLock(lock_path)
+    lock.acquire()
+
+    lock.release()
+    status = RuntimeLock.status(lock_path)
+
+    assert lock_path.exists()
+    assert lock_path.read_text(encoding="utf-8") == ""
+    assert status.owner_pid is None
+    assert status.owner_alive is None
+    assert status.locked is False
+
+
 def test_runtime_lock_clean_stale_removes_dead_owner_metadata(tmp_path):
     lock_path = tmp_path / "runtime.lock"
     lock_path.write_text("999999999\n", encoding="utf-8")

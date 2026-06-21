@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 - 2026-06-21
+
+- Added terminal/TUI Obsidian export actions for current conversations, latest
+  ChatGPT replies, visible pane markdown, and pasted markdown snippets.
+- When no Obsidian vault is configured, the TUI now prompts for either an
+  Obsidian vault folder or an exact `.md` export file path.
+
 ## 0.3.0 - 2026-06-21
 
 - Added a bundled trusted-local Obsidian Vault plugin that captures

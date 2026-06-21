@@ -28,6 +28,7 @@ class CommandPalette(ModalScreen[str | None]):
         ("open", "Open Chat"),
         ("search", "Search"),
         ("export", "Export"),
+        ("obsidian", "Export to Obsidian"),
         ("bookmark", "Bookmark"),
         ("notes", "Open Notes"),
         ("refresh", "Refresh"),

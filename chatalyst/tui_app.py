@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 from loguru import logger
 from textual.app import App, ComposeResult
@@ -17,9 +18,12 @@ from chatalyst.core.models import (
     BrowserState,
     Conversation,
     LoginState,
+    Message,
+    MessageRole,
     Note,
     Snippet,
 )
+from chatalyst.core.obsidian import ObsidianDestinationRequired, ObsidianExportService
 from chatalyst.core.plugins import PluginContext, PluginRegistry
 from chatalyst.core.runtime import RuntimeLock
 from chatalyst.core.search import SearchEngine
@@ -31,9 +35,39 @@ from chatalyst.widgets.command_palette import CommandPalette
 from chatalyst.widgets.conversation_view import ConversationView
 from chatalyst.widgets.message_input import MessageInput
 from chatalyst.widgets.notes_panel import NotesPanel
+from chatalyst.widgets.obsidian_dialog import ObsidianExportDialog
 from chatalyst.widgets.search_dialog import SearchDialog
 from chatalyst.widgets.snippet_panel import SnippetPanel
 from chatalyst.widgets.status_bar import StatusBar
+
+
+@dataclass(frozen=True)
+class ObsidianCommand:
+    selection: str = "conversation"
+    destination: str | None = None
+    body: str | None = None
+
+
+def parse_obsidian_command(value: str) -> ObsidianCommand:
+    raw = value.strip()
+    for prefix in ("/obsidian", "/ov"):
+        if raw == prefix:
+            return ObsidianCommand()
+        if raw.startswith(prefix + " "):
+            raw = raw.removeprefix(prefix).strip()
+            break
+    else:
+        return ObsidianCommand(destination=raw or None)
+    if not raw:
+        return ObsidianCommand()
+    if raw.startswith("text "):
+        return ObsidianCommand(selection="text", body=raw.removeprefix("text ").strip() or None)
+    first, _, rest = raw.partition(" ")
+    if first in {"last", "reply"}:
+        return ObsidianCommand(selection="last", destination=rest.strip() or None)
+    if first in {"visible", "view"}:
+        return ObsidianCommand(selection="visible", destination=rest.strip() or None)
+    return ObsidianCommand(destination=raw)
 
 
 class ChatGPTTUI(App[None]):
@@ -62,6 +96,7 @@ class ChatGPTTUI(App[None]):
         ("n", "new_chat", "New"),
         ("r", "refresh", "Refresh"),
         ("b", "bookmarks", "Bookmarks"),
+        ("o", "export_obsidian", "Obsidian"),
         ("x", "stage_last_code", "Stage"),
         ("p", "palette", "Palette"),
         ("ctrl+p", "palette", "Palette"),
@@ -81,6 +116,7 @@ class ChatGPTTUI(App[None]):
             self.cache.initialize()
             self.search_engine = SearchEngine(self.cache)
             self.export_service = ExportService(self.cache, config.exports_dir)
+            self.obsidian_export = ObsidianExportService(config)
             self.terminal = TerminalRunner(
                 cwd=config.workspace,
                 timeout_seconds=config.terminal_timeout_seconds,
@@ -283,6 +319,8 @@ class ChatGPTTUI(App[None]):
             asyncio.create_task(self.refresh_chats())
         elif command == "export":
             self._export_current()
+        elif command == "obsidian":
+            self._export_current_to_obsidian()
         elif command == "bookmark":
             self._bookmark_current()
         elif command == "notes":
@@ -326,6 +364,117 @@ class ChatGPTTUI(App[None]):
             self.current_conversation.id, ExportFormat.MARKDOWN
         )
         self.notify(f"Exported {path.name}")
+
+    async def action_export_obsidian(self) -> None:
+        self._export_current_to_obsidian()
+
+    def _export_current_to_obsidian(
+        self,
+        command: ObsidianCommand | None = None,
+    ) -> None:
+        command = command or ObsidianCommand()
+        if command.destination or self.obsidian_export.has_configured_vault():
+            self._write_obsidian_export(command)
+            return
+        self.push_screen(
+            ObsidianExportDialog(),
+            lambda destination: self._handle_obsidian_destination(command, destination),
+        )
+
+    def _handle_obsidian_destination(
+        self,
+        command: ObsidianCommand,
+        destination: str | None,
+    ) -> None:
+        if not destination:
+            self.notify("Obsidian export cancelled.", severity="warning")
+            return
+        self._write_obsidian_export(
+            ObsidianCommand(
+                selection=command.selection,
+                destination=destination,
+                body=command.body,
+            )
+        )
+
+    def _write_obsidian_export(self, command: ObsidianCommand) -> None:
+        try:
+            if command.selection == "conversation":
+                if not self.current_conversation:
+                    self.notify("Open a cached conversation first.", severity="warning")
+                    return
+                result = self.obsidian_export.export_conversation(
+                    self.current_conversation,
+                    self.current_messages,
+                    destination=command.destination,
+                )
+            elif command.selection == "last":
+                message = self._last_assistant_message()
+                if not self.current_conversation or message is None:
+                    self.notify("No cached ChatGPT reply is available.", severity="warning")
+                    return
+                result = self.obsidian_export.export_message(
+                    self.current_conversation,
+                    message,
+                    destination=command.destination,
+                )
+            elif command.selection == "visible":
+                body = self.query_one(ConversationView).last_markdown
+                if not body.strip():
+                    self.notify("Nothing visible to export.", severity="warning")
+                    return
+                title = (
+                    self.current_conversation.title
+                    if self.current_conversation
+                    else "Chatalyst"
+                )
+                result = self.obsidian_export.export_markdown(
+                    title=title,
+                    body=body,
+                    conversation_id=(
+                        self.current_conversation.id if self.current_conversation else None
+                    ),
+                    destination=command.destination,
+                    source="tui_visible",
+                )
+            elif command.selection == "text":
+                if not command.body:
+                    self.notify("No markdown text provided.", severity="warning")
+                    return
+                title = (
+                    self.current_conversation.title
+                    if self.current_conversation
+                    else "Chatalyst"
+                )
+                result = self.obsidian_export.export_markdown(
+                    title=title,
+                    body=command.body,
+                    conversation_id=(
+                        self.current_conversation.id if self.current_conversation else None
+                    ),
+                    destination=command.destination,
+                    source="tui_text",
+                )
+            else:
+                self.notify(
+                    f"Unknown Obsidian export target: {command.selection}",
+                    severity="error",
+                )
+                return
+        except ObsidianDestinationRequired:
+            self._export_current_to_obsidian(command)
+            return
+        except Exception as exc:
+            logger.exception("Obsidian export failed")
+            self.notify(f"Obsidian export failed: {exc}", severity="error")
+            return
+        self.notify(f"Obsidian export wrote {result.path.name}")
+
+    def _last_assistant_message(self) -> Message | None:
+        for message in reversed(self.current_messages):
+            if message.role is MessageRole.ASSISTANT:
+                return message
+        return self.current_messages[-1] if self.current_messages else None
 
     def _toggle_split(self) -> None:
         pane = self.query_one("#compare-pane")
@@ -403,6 +552,11 @@ class ChatGPTTUI(App[None]):
             return
         if value.startswith("/stage "):
             self._stage_inline_text(value.removeprefix("/stage ").strip())
+            return
+        if value == "/ov" or value.startswith("/ov ") or value == "/obsidian" or value.startswith(
+            "/obsidian "
+        ):
+            self._export_current_to_obsidian(parse_obsidian_command(value))
             return
         if not value:
             return

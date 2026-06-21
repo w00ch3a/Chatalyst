@@ -6,12 +6,13 @@ real authenticated Chromium session through Playwright, then stores a local
 SQLite productivity cache for offline browsing, search, notes, bookmarks, tags,
 exports, and future plugins.
 
-## Release 0.3.0
+## Release 0.3.1
 
-This release adds the bundled Obsidian Vault plugin, plugin hook delivery from
-MCP live ChatGPT sends/replies, ChatGPT App URL support, account-scoped
-workspaces, token-frugal MCP mode, private project aliases, plugin permission
-hardening, bounded MCP/SQLite payloads, and broader release diagnostics. See
+This release adds terminal/TUI Obsidian export actions on top of the bundled
+Obsidian Vault plugin, plus plugin hook delivery from MCP live ChatGPT
+sends/replies, ChatGPT App URL support, account-scoped workspaces, token-frugal
+MCP mode, private project aliases, plugin permission hardening, bounded
+MCP/SQLite payloads, and broader release diagnostics. See
 [CHANGELOG.md](CHANGELOG.md) for the full release notes.
 
 ## Install
@@ -155,6 +156,11 @@ Prompt commands:
 /stage last
 /stage bash echo hello
 /stage python print("hello")
+/ov
+/ov last
+/ov visible
+/ov text selected markdown
+/ov ~/Desktop/chat-export.md
 ```
 
 Terminal commands run locally in the project workspace without shell expansion.
@@ -165,6 +171,13 @@ Use `/stage last` to stage the last cached assistant code block. Use `/stage
 bash ...`, `/stage python ...`, or `/stage text ...` when you have selected and
 pasted a portion of a reply. Staged snippets open in an inspection panel before
 you choose copy, save, run, or cancel.
+
+Use `/ov` to export the current cached conversation to Obsidian or Markdown.
+Use `/ov last` for the latest cached ChatGPT reply, `/ov visible` for the
+currently rendered pane, or `/ov text ...` for pasted/selected markdown. If
+`CHATALYST_OBSIDIAN_VAULT` or `plugins/obsidian_vault/plugin_config.json` is
+not configured, Chatalyst prompts for either an Obsidian vault folder or an
+exact `.md` filename.
 
 ## Local Vault
 
@@ -203,6 +216,9 @@ When running from a cloned repo, the bundled plugin is already under
 `plugins/obsidian_vault`. For an installed workspace outside the repo, copy that
 folder into the workspace `plugins/` directory. Do not commit vault paths or
 plugin runtime config; `plugins/*/plugin_config.json` is ignored.
+
+The terminal app also supports direct Obsidian/Markdown export from the command
+palette or `/ov` slash commands. This does not require MCP.
 
 See [docs/Plugins.md](docs/Plugins.md) for the Obsidian setup, local plugin
 manifest format, and a minimal plugin skeleton.

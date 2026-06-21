@@ -78,6 +78,21 @@ That file is ignored by Git. Do not commit private vault paths, project names,
 or requirement routing config. Use
 `plugins/obsidian_vault/plugin_config.example.json` as the template.
 
+The TUI can also write directly to Obsidian or a standalone Markdown file:
+
+```text
+/ov
+/ov last
+/ov visible
+/ov text selected markdown
+/ov ~/Desktop/chat-export.md
+```
+
+`/ov` exports the current cached conversation. `/ov last` exports the latest
+cached ChatGPT reply. `/ov visible` exports the currently rendered pane. `/ov
+text ...` exports pasted markdown. When no vault is configured, the TUI prompts
+for either an Obsidian vault folder or an exact `.md` filename.
+
 ## Manifest
 
 `plugin.json`:

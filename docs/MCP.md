@@ -129,7 +129,7 @@ The same split-row rule applies when launching `chatalyst-mcp` directly:
     "--browser-mode",
     "provider",
     "--browser-profile",
-    "standard",
+    "lite",
     "--mcp-token-frugal",
     "--mcp-default-project",
     "Research",
@@ -182,10 +182,11 @@ For read-only local automation, add `--read-only` to `chatalyst-mcp` or
 `--mcp-read-only` to `chatalyst --mcp`. Read-only mode exposes vault inspection
 tools without exports, staged snippets, or live ChatGPT sends.
 
-Use `--browser-profile standard` when launching ChatGPT Apps through
-`https://chatgpt.com/apps/...` or `https://chat.openai.com/apps/...`.
-`ultralight` is still useful for plain cached-chat/reply loops, but it can strip
-styles and controls needed by app landing pages.
+Use `--browser-profile lite` for normal live MCP sends/replies. Use
+`--browser-profile standard` when launching ChatGPT Apps through
+`https://chatgpt.com/apps/...` or `https://chat.openai.com/apps/...`. MCP live
+modes now promote `ultralight` to `standard` because ultralight can strip styles
+and controls needed by app and project pages.
 
 For long-running agent loops, add `--mcp-token-frugal`. It lowers the default
 live result message window from 20 to 6 unless you explicitly pass
@@ -243,6 +244,11 @@ If Chatalyst can send the prompt but cannot prove that the visible ChatGPT page
 and the local cache both agree on the project, the response status is
 `scope_uncertain`. Treat that as a successful send with a project placement
 warning, not as proof that the chat landed in the requested project.
+
+Live send tools also accept `image_paths`, an array of up to four local png,
+jpg, jpeg, webp, or gif files under 20 MiB each. Chatalyst uploads them through
+the authenticated browser session before sending the prompt. It does not store
+the image bytes in SQLite.
 
 Live send/reply tools accept `wait_for_response_seconds` values up to 900
 seconds for long reasoning or research turns.

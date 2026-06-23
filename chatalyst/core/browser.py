@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -110,6 +110,21 @@ class BrowserOptimizationPolicy:
         )
 
     @classmethod
+    def lite_for_chatgpt_text_workspace(cls) -> BrowserOptimizationPolicy:
+        standard = cls.for_chatgpt_text_workspace()
+        return replace(
+            standard,
+            blocked_url_fragments=(
+                *standard.blocked_url_fragments,
+                "segment.io",
+                "statsig",
+                "intercom",
+                "fullstory",
+                "hotjar",
+            ),
+        )
+
+    @classmethod
     def ultralight_for_chatgpt_text_workspace(cls) -> BrowserOptimizationPolicy:
         return cls(
             blocked_resource_types=("image", "media", "font", "stylesheet"),
@@ -174,6 +189,8 @@ class BrowserOptimizationPolicy:
     def from_config(cls, config: AppConfig) -> BrowserOptimizationPolicy:
         if config.browser_profile is BrowserProfile.ULTRALIGHT:
             return cls.ultralight_for_chatgpt_text_workspace()
+        if config.browser_profile is BrowserProfile.LITE:
+            return cls.lite_for_chatgpt_text_workspace()
         return cls.for_chatgpt_text_workspace()
 
     def chromium_args(self) -> list[str]:

@@ -492,7 +492,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--browser-profile",
-        choices=("standard", "ultralight"),
+        choices=("standard", "lite", "ultralight"),
         default="standard",
         help="Browser resource policy. Ultralight blocks more assets and keeps less DOM visible.",
     )
@@ -554,6 +554,8 @@ def main() -> None:
             )
         )
     if args.doctor:
+        from chatalyst.core.config import live_mcp_browser_profile
+
         mcp_browser_mode = browser_mode
         if (
             args.mcp
@@ -562,13 +564,16 @@ def main() -> None:
             and args.browser_mode == "auto"
         ):
             mcp_browser_mode = "provider"
+        mcp_browser_profile = live_mcp_browser_profile(
+            mcp_browser_mode, args.browser_profile
+        )
         config = AppConfig.from_workspace(
             workspace,
             offline=args.offline or args.mcp_read_only,
             debug=args.debug,
             headless=args.headless,
             browser_mode=mcp_browser_mode,
-            browser_profile=args.browser_profile,
+            browser_profile=mcp_browser_profile,
             account=account,
         ).model_copy(
             update={
@@ -585,16 +590,21 @@ def main() -> None:
             run_doctor(config, include_mcp=args.mcp, max_text_chars=args.mcp_max_text_chars)
         )
     if args.smoke:
+        from chatalyst.core.config import live_mcp_browser_profile
+
         mcp_browser_mode = browser_mode
         if not args.mcp_read_only and not args.headless and args.browser_mode == "auto":
             mcp_browser_mode = "provider"
+        mcp_browser_profile = live_mcp_browser_profile(
+            mcp_browser_mode, args.browser_profile
+        )
         config = AppConfig.from_workspace(
             workspace,
             offline=args.offline or args.mcp_read_only,
             debug=args.debug,
             headless=args.headless,
             browser_mode=mcp_browser_mode,
-            browser_profile=args.browser_profile,
+            browser_profile=mcp_browser_profile,
             account=account,
         ).model_copy(
             update={
@@ -615,7 +625,10 @@ def main() -> None:
             )
         )
     if args.project_doctor:
+        from chatalyst.core.config import live_mcp_browser_profile
         from chatalyst.core.runtime import RuntimeLockError
+
+        mcp_browser_profile = live_mcp_browser_profile(browser_mode, args.browser_profile)
 
         config = AppConfig.from_workspace(
             workspace,
@@ -623,7 +636,7 @@ def main() -> None:
             debug=args.debug,
             headless=args.headless,
             browser_mode=browser_mode,
-            browser_profile=args.browser_profile,
+            browser_profile=mcp_browser_profile,
             account=account,
         ).model_copy(
             update={
@@ -668,18 +681,22 @@ def main() -> None:
             print(exc)
             raise SystemExit(2) from exc
     if args.mcp:
+        from chatalyst.core.config import live_mcp_browser_profile
         from chatalyst.core.mcp_server import ChatalystMCPServer, run_stdio
 
         mcp_browser_mode = browser_mode
         if not args.mcp_read_only and not args.headless and args.browser_mode == "auto":
             mcp_browser_mode = "provider"
+        mcp_browser_profile = live_mcp_browser_profile(
+            mcp_browser_mode, args.browser_profile
+        )
         config = AppConfig.from_workspace(
             workspace,
             offline=args.offline or args.mcp_read_only,
             debug=args.debug,
             headless=args.headless,
             browser_mode=mcp_browser_mode,
-            browser_profile=args.browser_profile,
+            browser_profile=mcp_browser_profile,
             account=account,
         ).model_copy(
             update={

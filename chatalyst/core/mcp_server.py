@@ -17,6 +17,9 @@ JsonObject = dict[str, Any]
 ToolHandler = Callable[[JsonObject], JsonObject | Awaitable[JsonObject]]
 DEFAULT_MCP_LIVE_RESULT_MESSAGE_LIMIT = 20
 FRUGAL_MCP_LIVE_RESULT_MESSAGE_LIMIT = 6
+MAX_IMAGE_ATTACHMENTS = 4
+MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024
+ALLOWED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
 
 if TYPE_CHECKING:
     from chatalyst.core.browser import BrowserController
@@ -341,6 +344,7 @@ class ChatalystMCPServer:
         prompt = self._require_bounded_str(arguments, "prompt", maximum=self.max_text_chars)
         if not prompt.strip():
             raise MCPError(-32602, "prompt must not be empty.")
+        image_paths = self._optional_image_paths(arguments)
         wait_seconds = self._optional_wait_seconds(arguments)
         project_reference = self._optional_project_reference(arguments)
         try:
@@ -357,6 +361,7 @@ class ChatalystMCPServer:
                         prompt,
                         wait_seconds=wait_seconds,
                         project_name=project_reference.resolved if project_reference else None,
+                        image_paths=image_paths,
                     )
                     if project_reference is not None:
                         scope = await chatgpt.verify_project_scope(project_reference.resolved)
@@ -388,6 +393,7 @@ class ChatalystMCPServer:
         prompt = self._require_bounded_str(arguments, "prompt", maximum=self.max_text_chars)
         if not prompt.strip():
             raise MCPError(-32602, "prompt must not be empty.")
+        image_paths = self._optional_image_paths(arguments)
         wait_seconds = self._optional_wait_seconds(arguments)
         try:
             async with RuntimeLock(
@@ -406,6 +412,7 @@ class ChatalystMCPServer:
                     result = await self._send_prompt_and_payload(
                         prompt,
                         wait_seconds=wait_seconds,
+                        image_paths=image_paths,
                     )
                     if result.get("conversation") is None:
                         result["conversation"] = opened.conversation.model_dump(mode="json")
@@ -600,6 +607,11 @@ class ChatalystMCPServer:
                             "properties": {
                                 "prompt": {"type": "string"},
                                 "project_name": {"type": "string"},
+                                "image_paths": {
+                                    "type": "array",
+                                    "maxItems": MAX_IMAGE_ATTACHMENTS,
+                                    "items": {"type": "string"},
+                                },
                                 "wait_for_response_seconds": {
                                     "type": "number",
                                     "minimum": 5,
@@ -625,6 +637,11 @@ class ChatalystMCPServer:
                             "properties": {
                                 "conversation_id": {"type": "string"},
                                 "prompt": {"type": "string"},
+                                "image_paths": {
+                                    "type": "array",
+                                    "maxItems": MAX_IMAGE_ATTACHMENTS,
+                                    "items": {"type": "string"},
+                                },
                                 "wait_for_response_seconds": {
                                     "type": "number",
                                     "minimum": 5,
@@ -886,6 +903,28 @@ class ChatalystMCPServer:
             "suggested_action": suggested_action,
         }
 
+    def _optional_image_paths(self, arguments: JsonObject) -> tuple[Path, ...]:
+        raw_paths = arguments.get("image_paths")
+        if raw_paths is None:
+            return ()
+        if not isinstance(raw_paths, list):
+            raise MCPError(-32602, "image_paths must be an array of local image paths.")
+        if len(raw_paths) > MAX_IMAGE_ATTACHMENTS:
+            raise MCPError(-32602, f"image_paths supports at most {MAX_IMAGE_ATTACHMENTS} files.")
+        paths: list[Path] = []
+        for raw_path in raw_paths:
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise MCPError(-32602, "image_paths entries must be non-empty strings.")
+            path = Path(raw_path).expanduser().resolve()
+            if not path.is_file():
+                raise MCPError(-32602, "image path does not exist or is not a file.")
+            if path.suffix.lower() not in ALLOWED_IMAGE_SUFFIXES:
+                raise MCPError(-32602, "image_paths only supports png, jpg, jpeg, webp, or gif.")
+            if path.stat().st_size > MAX_IMAGE_ATTACHMENT_BYTES:
+                raise MCPError(-32602, "image file is larger than 20 MiB.")
+            paths.append(path)
+        return tuple(paths)
+
     def _cache_counts(self) -> JsonObject:
         tables = ("projects", "conversations", "messages", "notes", "tags", "bookmarks")
         counts: JsonObject = {}
@@ -947,6 +986,7 @@ class ChatalystMCPServer:
         *,
         wait_seconds: float,
         project_name: str | None = None,
+        image_paths: tuple[Path, ...] = (),
     ) -> JsonObject:
         if self.chatgpt is None:
             raise MCPError(-32603, "ChatGPT service is unavailable.")
@@ -956,6 +996,8 @@ class ChatalystMCPServer:
         send_kwargs: JsonObject = {"response_timeout_seconds": wait_seconds}
         if project_name is not None:
             send_kwargs["project_name"] = project_name
+        if image_paths:
+            send_kwargs["image_paths"] = image_paths
         try:
             from chatalyst.core.chatgpt import PromptSubmittedNoAssistantResponseError
 
@@ -1151,7 +1193,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--browser-profile",
-        choices=("standard", "ultralight"),
+        choices=("standard", "lite", "ultralight"),
         default="standard",
         help="Browser resource policy. Ultralight blocks more assets and keeps less DOM visible.",
     )
@@ -1214,9 +1256,10 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
-    from chatalyst.core.config import AppConfig, validate_account_name
+    from chatalyst.core.config import AppConfig, live_mcp_browser_profile, validate_account_name
 
     browser_mode = "headless" if args.headless else args.browser_mode
+    browser_profile = live_mcp_browser_profile(browser_mode, args.browser_profile)
     try:
         account = validate_account_name(args.account)
     except ValueError as exc:
@@ -1235,7 +1278,7 @@ def main() -> None:
         offline=args.read_only,
         headless=args.headless,
         browser_mode=browser_mode,
-        browser_profile=args.browser_profile,
+        browser_profile=browser_profile,
         account=account,
     ).model_copy(
         update={

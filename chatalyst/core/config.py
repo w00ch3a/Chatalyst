@@ -38,7 +38,25 @@ class BrowserMode(StrEnum):
 
 class BrowserProfile(StrEnum):
     STANDARD = "standard"
+    LITE = "lite"
     ULTRALIGHT = "ultralight"
+
+
+def live_mcp_browser_profile(
+    browser_mode: BrowserMode | str,
+    browser_profile: BrowserProfile | str,
+) -> BrowserProfile:
+    mode = BrowserMode(browser_mode)
+    profile = BrowserProfile(browser_profile)
+    live_modes = {
+        BrowserMode.PROVIDER,
+        BrowserMode.BACKGROUND,
+        BrowserMode.HEADLESS,
+        BrowserMode.SLEEP,
+    }
+    if mode in live_modes and profile is BrowserProfile.ULTRALIGHT:
+        return BrowserProfile.STANDARD
+    return profile
 
 
 class AppConfig(BaseModel):
@@ -114,10 +132,15 @@ class AppConfig(BaseModel):
         resolved_mode = BrowserMode(browser_mode)
         resolved_profile = BrowserProfile(browser_profile)
         resolved_headless = headless or resolved_mode in {BrowserMode.HEADLESS, BrowserMode.SLEEP}
-        viewport_width = 1000 if resolved_profile is BrowserProfile.ULTRALIGHT else 1440
-        viewport_height = 720 if resolved_profile is BrowserProfile.ULTRALIGHT else 1000
-        retain_recent_turns = 4 if resolved_profile is BrowserProfile.ULTRALIGHT else 12
-        retain_sidebar_items = 20 if resolved_profile is BrowserProfile.ULTRALIGHT else 80
+        if resolved_profile is BrowserProfile.ULTRALIGHT:
+            viewport_width, viewport_height = 1000, 720
+            retain_recent_turns, retain_sidebar_items = 4, 20
+        elif resolved_profile is BrowserProfile.LITE:
+            viewport_width, viewport_height = 1200, 850
+            retain_recent_turns, retain_sidebar_items = 8, 40
+        else:
+            viewport_width, viewport_height = 1440, 1000
+            retain_recent_turns, retain_sidebar_items = 12, 80
         return cls(
             workspace=root,
             account=account_name,

@@ -53,6 +53,21 @@ class SelectorCatalog:
         ),
         description="Send prompt button.",
     )
+    file_input = SelectorGroup(
+        name="file_input",
+        candidates=('input[type="file"]',),
+        description="Hidden file picker input for ChatGPT attachments.",
+    )
+    attach_button = SelectorGroup(
+        name="attach_button",
+        candidates=(
+            'button[aria-label*="Attach"]',
+            'button[aria-label*="Upload"]',
+            'button[aria-label*="Add photos"]',
+            'button[aria-label*="Add files"]',
+        ),
+        description="Attachment button used to reveal the file picker.",
+    )
     stop_button = SelectorGroup(
         name="stop_button",
         candidates=(

@@ -302,6 +302,7 @@ class ChatGPTService:
         *,
         response_timeout_seconds: float | None = None,
         project_name: str | None = None,
+        image_paths: tuple[Path, ...] = (),
     ) -> AsyncIterator[Message]:
         if not prompt.strip():
             return
@@ -348,6 +349,7 @@ class ChatGPTService:
             baseline_last_assistant.markdown if baseline_last_assistant is not None else ""
         )
         composer = await self._locator(page, self.selectors.composer)
+        await self._attach_files(page, image_paths)
         await self._fill_composer(page, composer, prompt)
         if not await self._click_first(page, self.selectors.send_button):
             await composer.press("Enter")
@@ -890,6 +892,19 @@ class ChatGPTService:
         await composer.click()
         await page.keyboard.insert_text(prompt)
         await page.wait_for_timeout(250)
+
+    async def _attach_files(self, page: Page, file_paths: tuple[Path, ...]) -> None:
+        if not file_paths:
+            return
+        paths = [str(path) for path in file_paths]
+        file_input = page.locator('input[type="file"]').first
+        try:
+            await file_input.set_input_files(paths, timeout=5_000)
+        except PlaywrightTimeoutError as exc:
+            if not await self._click_first(page, self.selectors.attach_button):
+                raise RuntimeError("ChatGPT attachment control was not available.") from exc
+            await page.locator('input[type="file"]').first.set_input_files(paths, timeout=5_000)
+        await page.wait_for_timeout(750)
 
     async def _wait_until_chatgpt_idle(self, page: Page) -> None:
         elapsed = 0.0

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 from dataclasses import dataclass
+from pathlib import Path
 
 from loguru import logger
 from textual.app import App, ComposeResult
@@ -39,6 +41,8 @@ from chatalyst.widgets.obsidian_dialog import ObsidianExportDialog
 from chatalyst.widgets.search_dialog import SearchDialog
 from chatalyst.widgets.snippet_panel import SnippetPanel
 from chatalyst.widgets.status_bar import StatusBar
+
+ALLOWED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 
 @dataclass(frozen=True)
@@ -547,6 +551,9 @@ class ChatGPTTUI(App[None]):
         if value.startswith("/terminal "):
             await self._run_terminal_command(value.removeprefix("/terminal ").strip())
             return
+        if value.startswith("/image "):
+            await self._send_image_command(value)
+            return
         if value == "/stage last":
             await self.action_stage_last_code()
             return
@@ -568,10 +575,30 @@ class ChatGPTTUI(App[None]):
             return
         await self._send_prompt(value)
 
-    async def _send_prompt(self, prompt: str) -> None:
+    async def _send_image_command(self, value: str) -> None:
+        try:
+            parts = shlex.split(value)
+        except ValueError:
+            self.notify('Usage: /image "/path/to/image.png" prompt', severity="error")
+            return
+        if len(parts) < 3:
+            self.notify('Usage: /image "/path/to/image.png" prompt', severity="error")
+            return
+        raw_path = parts[1]
+        prompt = " ".join(parts[2:])
+        path = Path(raw_path).expanduser().resolve()
+        if path.suffix.lower() not in ALLOWED_IMAGE_SUFFIXES or not path.is_file():
+            self.notify("Image must be a local png, jpg, jpeg, webp, or gif.", severity="error")
+            return
+        if self.config.offline:
+            self.notify("Offline mode cannot upload images.", severity="warning")
+            return
+        await self._send_prompt(prompt, image_paths=(path,))
+
+    async def _send_prompt(self, prompt: str, image_paths: tuple[Path, ...] = ()) -> None:
         self._set_status(sync="streaming")
         try:
-            async for message in self.chatgpt.send_message(prompt):
+            async for message in self.chatgpt.send_message(prompt, image_paths=image_paths):
                 conversation_id = message.conversation_id
                 conversation = (
                     self.cache.get_conversation(conversation_id) or self.current_conversation

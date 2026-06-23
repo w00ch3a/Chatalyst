@@ -120,14 +120,16 @@ needed.
 The standard browser profile blocks images, media, fonts, telemetry endpoints,
 non-ChatGPT document navigations, audio, pings, background services, extra
 extension services, and keeps Chromium to a small renderer process budget.
-`ultralight` additionally blocks stylesheets, shrinks the viewport, and prunes
-more of the visible ChatGPT DOM for MCP/SSH workloads. Chatalyst intentionally
-does not use
+`lite` keeps stylesheets but uses a smaller viewport, tighter DOM pruning, and
+stricter telemetry blocking. `ultralight` additionally blocks stylesheets and is
+intended for deliberate local testing and non-provider browser runs, not live
+MCP provider sends. Chatalyst intentionally does not use
 `--single-process`; it is unstable for persistent authenticated Chromium
 sessions.
-Use the `standard` browser profile for ChatGPT App landing pages such as
-`https://chatgpt.com/apps/...`; some app launch pages rely on UI/CSS that
-`ultralight` intentionally removes.
+MCP live modes accept `lite` and automatically promote `ultralight` to
+`standard` if an older client config still passes it. Use `standard` for ChatGPT
+App landing pages such as `https://chatgpt.com/apps/...`; some app launch pages
+rely on UI/CSS that `ultralight` intentionally removes.
 
 For SSH use, log in once on the host with a visible browser, then run:
 
@@ -156,6 +158,7 @@ Prompt commands:
 /stage last
 /stage bash echo hello
 /stage python print("hello")
+/image "/path/to/screenshot.png" analyse this image
 /ov
 /ov last
 /ov visible
@@ -178,6 +181,9 @@ currently rendered pane, or `/ov text ...` for pasted/selected markdown. If
 `CHATALYST_OBSIDIAN_VAULT` or `plugins/obsidian_vault/plugin_config.json` is
 not configured, Chatalyst prompts for either an Obsidian vault folder or an
 exact `.md` filename.
+
+Use `/image "/path/to/file.png" prompt` to upload a local png, jpg, jpeg, webp,
+or gif through the authenticated ChatGPT browser session.
 
 ## Local Vault
 
@@ -277,6 +283,10 @@ MCP tool choice:
   existing ChatGPT thread.
 - Use `chatalyst_send_new_message` when a fresh ChatGPT thread is the right
   shape for the task.
+
+Both live send tools accept `image_paths`, an array of up to four local png,
+jpg, jpeg, webp, or gif files. Chatalyst uploads them through the browser file
+picker before sending the prompt; image bytes are not stored in SQLite.
 
 When `--mcp-default-project` is set, `chatalyst_send_new_message` first opens
 that ChatGPT project or app before creating the new chat. The value can be a
@@ -380,7 +390,7 @@ directly:
     "--browser-mode",
     "provider",
     "--browser-profile",
-    "ultralight",
+    "lite",
     "--mcp-default-project",
     "Research",
     "--mcp-live-response-timeout-seconds",

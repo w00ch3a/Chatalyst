@@ -9,7 +9,7 @@ from chatalyst.core.browser import (
     BrowserLaunchPlanner,
     BrowserOptimizationPolicy,
 )
-from chatalyst.core.config import AppConfig
+from chatalyst.core.config import AppConfig, BrowserProfile, live_mcp_browser_profile
 from chatalyst.core.models import BrowserState
 
 
@@ -96,6 +96,44 @@ def test_standard_browser_profile_keeps_stylesheets_available():
     assert policy.should_abort_request("https://example.com/", "document")
     assert "--process-per-site" in policy.chromium_args()
     assert "--renderer-process-limit=2" in policy.chromium_args()
+
+
+def test_lite_browser_profile_keeps_stylesheets_with_tighter_pruning():
+    config = AppConfig.from_workspace(".", browser_mode="provider", browser_profile="lite")
+    policy = BrowserOptimizationPolicy.from_config(config)
+
+    assert config.browser_viewport_width == 1200
+    assert config.browser_viewport_height == 850
+    assert config.browser_retain_recent_turns == 8
+    assert config.browser_retain_sidebar_items == 40
+    assert not policy.should_abort_request("https://chatgpt.com/assets/app.css", "stylesheet")
+    assert policy.should_abort_request("https://chatgpt.com/hotjar/script.js", "script")
+    assert policy.should_abort_request("https://example.com/", "document")
+    assert "--disable-gpu" not in policy.chromium_args()
+
+
+def test_live_mcp_provider_uses_standard_profile_when_ultralight_requested():
+    assert (
+        live_mcp_browser_profile("provider", "ultralight")
+        is BrowserProfile.STANDARD
+    )
+    assert (
+        live_mcp_browser_profile("background", "ultralight")
+        is BrowserProfile.STANDARD
+    )
+    assert (
+        live_mcp_browser_profile("headless", "ultralight")
+        is BrowserProfile.STANDARD
+    )
+    assert (
+        live_mcp_browser_profile("sleep", "ultralight")
+        is BrowserProfile.STANDARD
+    )
+    assert (
+        live_mcp_browser_profile("visible", "ultralight")
+        is BrowserProfile.ULTRALIGHT
+    )
+    assert live_mcp_browser_profile("provider", "lite") is BrowserProfile.LITE
 
 
 @pytest.mark.asyncio

@@ -447,6 +447,56 @@ async def test_mcp_send_payload_handles_no_final_message(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_mcp_send_payload_passes_valid_image_paths(tmp_path):
+    server = _server(tmp_path)
+    image = tmp_path / "screen.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n")
+    seen_paths: tuple[Path, ...] = ()
+
+    class ImageChatGPT:
+        async def send_message(
+            self,
+            prompt,
+            *,
+            response_timeout_seconds=None,
+            image_paths=(),
+        ):
+            nonlocal seen_paths
+            seen_paths = image_paths
+            yield Message(
+                id="assistant-1",
+                conversation_id="chat-1",
+                role=MessageRole.ASSISTANT,
+                markdown=prompt,
+                ordinal=1,
+            )
+
+    server.chatgpt = ImageChatGPT()  # type: ignore[assignment]
+    try:
+        image_paths = server._optional_image_paths({"image_paths": [str(image)]})  # noqa: SLF001
+        await server._send_prompt_and_payload(  # noqa: SLF001
+            "analyse this",
+            wait_seconds=5,
+            image_paths=image_paths,
+        )
+    finally:
+        server.cache.close()
+
+    assert seen_paths == (image.resolve(),)
+
+
+def test_mcp_image_paths_rejects_non_images(tmp_path):
+    server = _server(tmp_path)
+    text = tmp_path / "note.txt"
+    text.write_text("not an image", encoding="utf-8")
+    try:
+        with pytest.raises(MCPError, match="only supports"):
+            server._optional_image_paths({"image_paths": [str(text)]})  # noqa: SLF001
+    finally:
+        server.cache.close()
+
+
+@pytest.mark.asyncio
 async def test_mcp_health_reports_scope_and_cache_counts(tmp_path):
     server = _server(tmp_path)
     conversation = Conversation(

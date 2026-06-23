@@ -6,14 +6,12 @@ real authenticated Chromium session through Playwright, then stores a local
 SQLite productivity cache for offline browsing, search, notes, bookmarks, tags,
 exports, and future plugins.
 
-## Release 0.3.1
+## Release 0.3.2
 
-This release adds terminal/TUI Obsidian export actions on top of the bundled
-Obsidian Vault plugin, plus plugin hook delivery from MCP live ChatGPT
-sends/replies, ChatGPT App URL support, account-scoped workspaces, token-frugal
-MCP mode, private project aliases, plugin permission hardening, bounded
-MCP/SQLite payloads, and broader release diagnostics. See
-[CHANGELOG.md](CHANGELOG.md) for the full release notes.
+This release adds live image upload support for MCP and the terminal UI,
+introduces the `lite` browser profile for lower-resource ChatGPT operation, and
+keeps `ultralight` as an experimental non-live profile. See [CHANGELOG.md](CHANGELOG.md)
+for the full release notes.
 
 ## Install
 

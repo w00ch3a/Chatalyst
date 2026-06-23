@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2 - 2026-06-23
+
+- Added live image upload support for MCP send/reply tools via validated local
+  `image_paths`.
+- Added terminal `/image "/path/to/file.png" prompt` support for uploading an
+  image through the authenticated ChatGPT browser session.
+- Added the `lite` browser profile for lower-resource live MCP use while
+  keeping ChatGPT stylesheets enabled.
+- Promoted unsafe live MCP `ultralight` usage to `standard` to avoid stripped UI
+  failures on ChatGPT project/app pages.
+
 ## 0.3.1 - 2026-06-21
 
 - Added terminal/TUI Obsidian export actions for current conversations, latest

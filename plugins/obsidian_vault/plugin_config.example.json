@@ -1,0 +1,5 @@
+{
+  "vault_path": "/absolute/path/to/your/Obsidian Vault",
+  "folder": "Chatalyst/Requirements",
+  "requirements": ["athena-visual-qa-gate"]
+}
